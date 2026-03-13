@@ -1,0 +1,104 @@
+第一步：扔给 Trae 的 WorkerManager 重构代码
+让 Trae 把 WorkerManager 真正变成一个“只造一次、无限复用的缓存池”：
+from langchain_core.messages import SystemMessage
+from langgraph.prebuilt import create_react_agent
+import logging
+
+logger = logging.getLogger(__name__)
+
+class WorkerManager:
+    def __init__(self, llm):
+        self.llm = llm
+        self._agent_cache = {}  # 真正的单例实例池
+
+    def get_or_create_agent(self, name: str, base_prompt: str, tools: list):
+        """
+        优雅的工厂方法：如果缓存里有这个工种（如天气Agent），直接返回！
+        """
+        if name in self._agent_cache:
+            logger.info(f"命中缓存，直接返回已创建的 {name} Agent 实例")
+            return self._agent_cache[name]
+
+        # 核心魔法：这是一个闭包函数。
+        # LangGraph 会在每次调用 Agent 去干活时，自动执行这个函数，并传入最新的状态机
+        def dynamic_state_modifier(state: dict):
+            # 运行时动态提取当前用户的目的地、偏好等信息
+            destination = state.get("destination", "未知目的地")
+            days = state.get("days", "未知天数")
+            
+            # 将静态的基础 Prompt 与动态的上下文结合
+            full_prompt = f"{base_prompt}\n\n当前用户行程上下文：\n目的地：{destination}\n天数：{days}\n请根据以上信息调用工具查询。"
+            return [SystemMessage(content=full_prompt)]
+
+        # 真正只创建一次！将 LLM、工具和动态函数组装起来
+        logger.info(f"冷启动，正在创建全新的 {name} Agent 实例...")
+        agent = create_react_agent(
+            model=self.llm,
+            tools=tools,
+            state_modifier=dynamic_state_modifier  # 传入函数对象，而不是写死的字符串！
+        )
+        
+        # 永久存入缓存池
+        self._agent_cache[name] = agent
+        return agent
+第二步：扔给 Trae 的 BaseWorker 与优雅的 execute
+让 Trae 使用面向对象基类 + 装饰器，把原来“又臭又长”的 execute 变成纯粹的流水线：
+from functools import wraps
+from typing import Any, Dict
+
+# 1. 抽离防爆盾：统一的异常处理装饰器
+def with_retry_and_log(func):
+    @wraps(func)
+    async def wrapper(self, state: dict, *args, **kwargs):
+        try:
+            return await func(self, state, *args, **kwargs)
+        except Exception as e:
+            logger.error(f"[{self.name} Worker] 执行失败: {str(e)}")
+            # 优雅降级：返回错误状态，防止整个图崩溃
+            return {self.output_key: f"抱歉，获取{self.name}信息时发生错误。"}
+    return wrapper
+
+# 2. 干净清爽的基类引擎
+class BaseWorker:
+    def __init__(self, manager: WorkerManager, name: str, base_prompt: str, tools: list, output_key: str):
+        self.name = name
+        self.output_key = output_key # 比如 "weather_info", "hotel_info"
+        # 初始化时就向工厂要人，造好并缓存
+        self.agent = manager.get_or_create_agent(name, base_prompt, tools)
+
+    # 抽离数据解析逻辑
+    def _parse_response(self, response: dict) -> str:
+        """从 LangGraph 复杂的返回消息中提取最终 AI 说的文本"""
+        return response["messages"][-1].content
+
+    @with_retry_and_log
+    async def execute(self, state: dict) -> Dict[str, Any]:
+        """
+        极其优雅的流水线操作台 (子类不需要重写这个方法！)
+        """
+        logger.info(f"[{self.name} Worker] 开始执行...")
+        
+        # 1. 呼叫打工人干活 (此时 dynamic_state_modifier 会自动读取 state 里的北京/上海)
+        # 注意：这里传给 Agent 的 messages 是为了保持对话上下文
+        response = await self.agent.ainvoke({"messages": state.get("messages", [])})
+        
+        # 2. 解析最终结果
+        final_text = self._parse_response(response)
+        
+        # 3. 按照 LangGraph 要求打包回传给状态机
+        logger.info(f"[{self.name} Worker] 执行完毕。")
+        return {
+            "messages": response["messages"], # 汇总历史消息
+            self.output_key: final_text       # 将结果存入状态机专属字段
+        }
+
+# 3. 扩展一个新 Agent 有多优雅？只需 3 行代码！
+class WeatherWorker(BaseWorker):
+    def __init__(self, manager: WorkerManager):
+        super().__init__(
+            manager=manager,
+            name="weather",
+            base_prompt="你是一个天气助手。请调用高德工具查询天气。",
+            tools=[get_amap_weather_tool()], # 传入具体的 MCP 工具
+            output_key="weather_info"
+        )

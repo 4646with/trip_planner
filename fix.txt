@@ -1,0 +1,162 @@
+问题分析
+“未知”城市问题 (上下文丢失)
+
+日志现象：景点和天气 Agent 都在查询“未知”城市，导致工具调用失败。
+
+原因：在 workers.py 中调用 Agent 时，代码写的是 self.agent.ainvoke({"messages": state.get("messages", [])})。你只把历史消息传给了 Agent，而没有把 city, start_date 等其他状态参数传过去。导致 dynamic_state_modifier 在获取城市时，只能拿到默认值“未知”。
+
+Moonshot JSON Schema 报错 (Pydantic 验证问题)
+
+日志现象：Invalid request: response_format.json_schema is not a valid moonshot flavored json schema... keyword 'default' is not allowed at the same level as anyOf
+
+原因：由于你使用的是 Moonshot (Kimi) 的大模型，它对输出 JSON Schema 的校验极其严格。在 schemas.py 中，很多字段被定义为 Optional[T] = Field(default=...)。这在 JSON Schema 中会生成包含 anyOf (允许类型或 null) 并带有 default 的结构，而 Moonshot 的严格模式明确禁止这种组合。
+
+🛠️ 终极修复方案
+我们需要分别修改 schemas.py（解决 Schema 报错）和 workers.py（解决城市未知问题）。
+
+第一步：修复 schemas.py (兼容 Moonshot 严格输出模式)
+打开 schemas.py 文件，我们将所有容易引起冲突的 Optional + default 的组合进行清理。将明确有默认值的字段改为强类型（如 str，float），并将真正的 Optional 字段的 default=None 移除。
+
+请完全替换 schemas.py 中的 Attraction, Meal, Hotel 和 DayPlan 等响应模型部分（从 Location 开始到最后）：
+
+Python
+
+# ============ 响应模型 (Moonshot 兼容版) ============
+
+class Location(BaseModel):
+    longitude: float = Field(...,description="经度",ge=-180,le=180)
+    latitude: float = Field(...,description="纬度",ge=-90,le=90)
+
+class Attraction(BaseModel):
+    name: str = Field(..., description="景点名称")
+    address: str = Field(..., description="地址")
+    location: Optional[Location] = Field(description="经纬度坐标") # 移除 default=None
+    visit_duration: int = Field(..., description="建议游览时间(分钟)")
+    description: str = Field(..., description="景点描述")
+    category: str = Field(default="景点", description="景点类别") # 移除 Optional
+    rating: float = Field(default=0.0, description="评分") # 移除 Optional
+    photos: List[str] = Field(default_factory=list, description="景点图片URL列表") # 移除 Optional
+    poi_id: str = Field(default="", description="POI ID") # 移除 Optional
+    image_url: str = Field(default="", description="图片URL") # 移除 Optional
+    ticket_price: int = Field(default=0, description="门票价格(元)")
+    
+class Meal(BaseModel):
+    type: str = Field(..., description="餐饮类型: breakfast/lunch/dinner/snack")
+    name: str = Field(..., description="餐饮名称")
+    address: str = Field(default="", description="地址") # 移除 Optional
+    location: Optional[Location] = Field(description="经纬度坐标") # 移除 default=None
+    description: str = Field(default="", description="描述") # 移除 Optional
+    estimated_cost: int = Field(default=0, description="预估费用(元)")
+
+class Hotel(BaseModel):
+    name: str = Field(..., description="酒店名称")
+    address: str = Field(default="", description="酒店地址")
+    location: Optional[Location] = Field(description="酒店位置") # 移除 default=None
+    price_range: str = Field(default="", description="价格范围")
+    rating: str = Field(default="", description="评分")
+    distance: str = Field(default="", description="距离景点距离")
+    type: str = Field(default="", description="酒店类型")
+    estimated_cost: int = Field(default=0, description="预估费用(元/晚)")
+
+class Budget(BaseModel):
+    total_attractions: int = Field(default=0,description="景点门票总费用")
+    total_hotels: int = Field(default=0,description="酒店总费用")
+    total_meals: int = Field(default=0,description="餐饮总费用")
+    total_transportation: int = Field(default=0,description="交通总费用")
+    total: int = Field(default=0,description="总费用")
+
+class DayPlan(BaseModel):
+    date: str = Field(default="", description="日期 YYYY-MM-DD")
+    day_index: int = Field(default=0, description="第几天(从0开始)")
+    description: str = Field(default="", description="当日行程描述")
+    transportation: str = Field(default="", description="交通方式")
+    accommodation: str = Field(default="", description="住宿")
+    hotel: Optional[Hotel] = Field(description="推荐酒店") # 移除 default=None
+    attractions: List[Attraction] = Field(default_factory=list, description="景点列表")
+    meals: List[Meal] = Field(default_factory=list, description="餐饮列表")
+
+class WeatherInfo(BaseModel):
+    date: str = Field(default="", description="日期")
+    day_weather: str = Field(default="", description="白天天气")
+    night_weather: str = Field(default="", description="夜间天气")
+    day_temp: int = Field(default=0, description="白天温度(摄氏度)")
+    night_temp: int = Field(default=0, description="夜间温度(摄氏度)")
+    wind_direction: str = Field(default="", description="风向")
+    wind_power: str = Field(default="", description="风力")
+
+class TripPlan(BaseModel):
+    city: str = Field(default="", description="目的地城市")
+    start_date: str = Field(default="", description="开始日期")
+    end_date: str = Field(default="", description="结束日期")
+    days: List[DayPlan] = Field(default_factory=list, description="每日行程")
+    weather_info: List[WeatherInfo] = Field(default_factory=list, description="天气信息")
+    overall_suggestions: str = Field(default="", description="总体建议")
+    budget: Optional[Budget] = Field(description="预算信息") # 移除 default=None
+
+class TripPlanResponse(BaseModel):
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(default="", description="消息")
+    data: Optional[TripPlan] = Field(description="旅行计划数据") # 移除 default=None
+
+class ErrorResponse(BaseModel):
+    success: bool = Field(default=False, description="是否成功")
+    message: str = Field(..., description="错误消息")
+    error_code: Optional[str] = Field(description="错误代码") # 移除 default=None
+第二步：修复 workers.py (让 Agent 知道目标城市)
+打开 workers.py 文件，进行两个关键的小改动：
+
+改动 1： 在 AgentFactory.get_or_create_agent 中，告诉底层 Agent 接受我们自定义的 AgentState。
+
+Python
+
+# 找到 workers.py 中的 AgentFactory 类，修改 get_or_create_agent 方法：
+    def get_or_create_agent(self, name: str, base_prompt: str, tools: List[BaseTool]) -> Any:
+        if name in self._agent_cache:
+            return self._agent_cache[name]
+
+        def dynamic_state_modifier(state: dict):
+            safe_state = {
+                "city": state.get("city", "未知"),
+                "transportation": state.get("transportation", "未知"),
+                "accommodation": state.get("accommodation", "未知"),
+                "free_text_input": state.get("free_text_input", "无"),
+                "start_date": state.get("start_date", "未知"),
+                "end_date": state.get("end_date", "未知"),
+                "travel_days": state.get("travel_days", 0),
+            }
+            return base_prompt.format(**safe_state)
+
+        agent = create_react_agent(
+            model=self.llm,
+            tools=tools,
+            prompt=dynamic_state_modifier,
+            state_schema=AgentState  # <---- 【新增这一行】，让底层 Agent 认识完整状态！
+        )
+        self._agent_cache[name] = agent
+        return agent
+改动 2： 在 BaseWorker.execute 方法中，将整个 state 传递给 Agent，而不是只传 messages。
+
+Python
+
+# 找到 workers.py 中的 BaseWorker 类，修改 execute 方法：
+    @with_retry_and_log
+    async def execute(self, state: AgentState) -> Dict[str, Any]:
+        print(f"[{self.name}] 正在调用 LLM 和工具...")
+        
+        # 【关键修改】：把完整的 state 传进去，而不仅仅是 messages
+        # 这样 dynamic_state_modifier 就能成功提取到 city 等信息了
+        response = await self.agent.ainvoke(state) 
+        
+        final_text = self._parse_response(response)
+        has_data = len(final_text) > 50
+        
+        print(f"[{self.name}] 返回内容预览: {final_text[:300]}...")
+        
+        agent_results = self._update_agent_results(state, success=True, has_data=has_data)
+        call_count = self._update_call_count(state)
+        return {
+            "messages": response["messages"], # 从返回结果中提取更新后的消息
+            self.output_key: final_text,
+            "agent_results": agent_results,
+            "agent_call_count": call_count
+        }
