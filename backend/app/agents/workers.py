@@ -81,7 +81,7 @@ def with_retry_and_log(func):
                 "messages": state.get("messages", []),
                 self.output_key: {"success": False, "data": {}, "error": str(e)},
                 "agent_results": self._update_agent_results(
-                    state, success=False, has_data=False
+                    state, success=False
                 ),
             }
 
@@ -141,13 +141,12 @@ class BaseWorker:
         return ""
 
     def _update_agent_results(
-        self, state: AgentState, success: bool = True, has_data: bool = True
+        self, state: AgentState, success: bool = True
     ) -> dict:
         agent_results = state.get("agent_results", {}).copy()
         agent_results[self.name] = {
             "called": True,
             "success": success,
-            "has_data": has_data,
         }
         return agent_results
 
@@ -201,7 +200,7 @@ class BaseWorker:
         )
 
         agent_results = self._update_agent_results(
-            state, success=has_data, has_data=has_data
+            state, success=has_data
         )
         call_count = self._update_call_count(state)
 
