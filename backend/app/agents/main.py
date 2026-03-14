@@ -15,7 +15,7 @@ from ..services.llm_service import get_llm
 from ..models.schemas import TripRequest, TripPlan
 from ..services.mcp_tools import initialize_mcp_tools, cleanup_mcp_tools
 from .supervisor import Supervisor
-from .workers import WorkerExecutor as WorkerManager, Planner
+from .workers import WorkerExecutor as WorkerManager, Planner, get_agent_registry
 from .graph.builder import GraphBuilder
 from .utils.parsers import parse_and_build_plan
 
@@ -64,13 +64,22 @@ class MapAgentsSystem:
         self._planner = Planner(self._llm)
 
         logger.info("正在构建 StateGraph...")
+        
+        # ✅ 动态获取所有 Worker 节点（使用 name 作为节点名）
+        registry = get_agent_registry()
+        worker_nodes = {}
+        for agent_key, config in registry.items():
+            node_name = config["name"]  # 如 "attraction_agent"
+            worker_nodes[node_name] = self._worker_manager.get_node_func(agent_key)
+
+        logger.info(
+            f"已发现 {len(worker_nodes)} 个 Worker: {list(worker_nodes.keys())}"
+        )
+
         builder = GraphBuilder(
             supervisor_node=self._supervisor.get_node(),
-            attraction_node=self._worker_manager.get_node_func("attraction"),
-            weather_node=self._worker_manager.get_node_func("weather"),
-            hotel_node=self._worker_manager.get_node_func("hotel"),
-            route_node=self._worker_manager.get_node_func("route"),
             planner_node=self._planner.get_node(),
+            worker_nodes=worker_nodes,
         )
         self._graph = builder.build()
 

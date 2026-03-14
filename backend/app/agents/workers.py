@@ -80,9 +80,7 @@ def with_retry_and_log(func):
             return {
                 "messages": state.get("messages", []),
                 self.output_key: {"success": False, "data": {}, "error": str(e)},
-                "agent_results": self._update_agent_results(
-                    state, success=False
-                ),
+                "agent_results": self._update_agent_results(state, success=False),
             }
 
     return wrapper
@@ -140,9 +138,7 @@ class BaseWorker:
             return last_msg.content if hasattr(last_msg, "content") else str(last_msg)
         return ""
 
-    def _update_agent_results(
-        self, state: AgentState, success: bool = True
-    ) -> dict:
+    def _update_agent_results(self, state: AgentState, success: bool = True) -> dict:
         agent_results = state.get("agent_results", {}).copy()
         agent_results[self.name] = {
             "called": True,
@@ -199,9 +195,7 @@ class BaseWorker:
             flush=True,
         )
 
-        agent_results = self._update_agent_results(
-            state, success=has_data
-        )
+        agent_results = self._update_agent_results(state, success=has_data)
         call_count = self._update_call_count(state)
 
         return {
@@ -316,3 +310,17 @@ class Planner:
             return await self.generate(state)
 
         return planner_node
+
+
+def get_agent_registry():
+    return AGENT_REGISTRY
+
+
+def get_worker_keys():
+    """获取所有 Worker Agent 的 key（用于 get_node_func）"""
+    return list(AGENT_REGISTRY.keys())
+
+
+def get_worker_names():
+    """获取所有 Worker Agent 的 name（用于节点命名）"""
+    return [config["name"] for config in AGENT_REGISTRY.values()]
