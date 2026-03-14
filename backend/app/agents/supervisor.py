@@ -56,7 +56,7 @@ class Supervisor:
         self._chain = prompt | supervisor_llm
         print("Supervisor 决策链已构建")
 
-    async def decide(self, state: AgentState) -> Dict[str, str]:
+    async def decide(self, state: AgentState) -> Dict[str, Any]:
         """
         执行路由决策
 
@@ -64,7 +64,7 @@ class Supervisor:
             state: 当前状态
 
         Returns:
-            {"next": "agent_name"}
+            {"next": "agent_name"} 或 {"next": ["agent1", "agent2"]}
         """
         print("🧠 Supervisor 正在分析并决策...")
 
@@ -99,8 +99,17 @@ class Supervisor:
 
             print(f"  [思考过程]: {decision.reasoning}")
             print(f"  [决定流向]: {decision.next}")
+            if decision.parallel:
+                print(f"  [并发模式]: 是")
 
-            return {"next": decision.next}
+            # 处理并发或串行
+            if decision.parallel and isinstance(decision.next, list):
+                return {"next": decision.next}
+            elif isinstance(decision.next, list):
+                # 如果返回的是列表但parallel=False，取第一个
+                return {"next": decision.next[0]}
+            else:
+                return {"next": decision.next}
 
         except Exception as e:
             print(f"❌ Supervisor 决策失败: {e}")
@@ -115,7 +124,7 @@ class Supervisor:
             可用于 add_node 的异步函数
         """
 
-        async def supervisor_node(state: AgentState) -> Dict[str, str]:
+        async def supervisor_node(state: AgentState) -> Dict[str, Any]:
             return await self.decide(state)
 
         return supervisor_node

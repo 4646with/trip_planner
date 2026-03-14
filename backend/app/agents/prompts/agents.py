@@ -27,13 +27,24 @@ class AgentPrompts:
 - 酒店数据: {hotels_status}
 - 路线数据: {routes_status}
 
-你的任务：
-1. 检查结构化数据是否有效（非空数组）
-2. 如果缺少必要数据，将任务分配给对应的专家
-3. 如果用户已说明住宿安排（如住亲戚家），则无需调用 hotel_agent
-4. 当所有必要信息都收集完毕后，输出 'planner_agent' 进行最终汇总。
+【重要】并发执行规则：
+1. 如果多个数据源之间没有依赖关系（如景点和天气、酒店和天气），可以并发获取
+2. 路线规划(route_agent)依赖于景点信息，必须在景点获取完成后才能执行
+3. 只有当所有必要数据都收集完毕后，才输出 planner_agent
 
-请思考并决定下一步调用谁。
+请按以下JSON格式输出决策：
+```json
+{{
+  "next": "agent_name",  // 单个节点名，或 ["agent1", "agent2"] 列表
+  "parallel": false,      // 是否并发执行，true或false
+  "reasoning": "决策理由"
+}}
+```
+
+示例：
+- 并发获取: {{"next": ["attraction_agent", "weather_agent"], "parallel": true, "reasoning": "景点和天气查询互不依赖，可以并发"}}
+- 串行执行: {{"next": "attraction_agent", "parallel": false, "reasoning": "需要先获取景点信息"}}
+- 汇总: {{"next": "planner_agent", "parallel": false, "reasoning": "所有数据已收集完毕"}}
 """
 
     # ========== Attraction Agent 提示词 ==========
