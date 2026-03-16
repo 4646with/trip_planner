@@ -1,63 +1,37 @@
-1. 核心设计思想与架构拓扑
-整个模块从上到下分为四个层级，各司其职，严格遵循单一职责原则 (SRP)：
-防爆盾层 (Decorator)：with_retry_and_log，负责全局异常拦截与优雅降级
-。
-兵工厂层 (Factory)：AgentFactory，负责 Agent 实例的单例缓存与动态状态注入
-。
-标准流水线 (Base Class)：BaseWorker，封装大模型的请求、解析与状态机回传
-。
-具体工种 (Concrete Workers)：继承自基类，仅需配置专属 Prompt 与 MCP 工具即可完成扩展
-。
-
---------------------------------------------------------------------------------
-2. 核心组件详细解析
-🛡️ 2.1 统一异常处理装饰器：with_retry_and_log
-作用：作为所有 Worker 节点的“防爆盾”，彻底抽离了恶心的 try...except 业务代码
-。
-优雅降级：当大模型抽风或高德 API 崩溃时，它能接管异常并打印 traceback 回溯
-。
-保障图流转：拦截错误后，不会导致整个 FastAPI 服务崩溃，而是构造一个包含报错信息的字典回传给状态机（AgentState），保证 LangGraph 的工作流能继续向下推进
-。
-🏭 2.2 真正的单例实例池：AgentFactory
-作用：彻底解决 LangGraph 在动态 Prompt 下无法缓存 Agent 的世纪难题
-。
-全局缓存字典：内部维护 _agent_cache 字典，如果已有对应 Agent，直接热调用命中缓存，实现毫秒级响应
-。
-动态闭包黑魔法 (dynamic_state_modifier)：这是工厂的核心。它不再将“目的地”写死成静态文本，而是传递一个可执行的闭包函数给 create_react_agent
-。当系统运转时，它才从最新的状态机里提取 city、start_date 等上下文并组装成 SystemMessage
-。
-收益：最大耗能的大模型客户端和 MCP 工具只需“冷启动”创建一次，后续千万次并发请求皆可复用这同一个智能体实例
-。
-⚙️ 2.3 纯粹的流水线引擎：BaseWorker
-作用：所有具体 Worker 的超级父类，封印了底层交互的脏活累活
-。
-标准化初始化：向 AgentFactory 传入名称、提示词和工具，获取缓存实例
-。
-数据清洗提取 (_parse_response)：自动从 LangChain 庞杂的对话历史记录中，精准提取 AI 最终生成的文本内容
-。
-状态机维护：自动统计该节点的调用次数 (_update_call_count) 以及成功状态 (_update_agent_results)，为图的其他节点提供元数据
-。
-核心执行台 (execute)：套上了防爆盾装饰器，以极其干净的 4 行核心代码完成了“调用大模型 -> 清洗数据 -> 组装状态机”的全生命周期
-。
-👷‍♂️ 2.4 极简的 Worker 扩展实现
-作用：展示了系统极强的可扩展性。得益于 BaseWorker 的封装，现在新增一个智能体（如：餐饮 Agent）只需要寥寥数行代码。
-现有打工人：包含了 AttractionWorker（景点）、WeatherWorker（天气）、HotelWorker（酒店）和 RouteWorker（路线）
-。
-实现方式：只需继承基类，通过 super().__init__ 注入特定的 AgentPrompts，并从 get_mcp_manager 中挂载对应的高德地图工具（如 AmapTools.WEATHER）即可
-。
-🚦 2.5 并发控制与兼容层：WorkerExecutor
-作用：作为整个部门的车间主任，对外暴露可供 LangGraph 直接调用的节点方法
-。
-限流保护：内置 asyncio.Semaphore(1) 信号量与 asyncio.sleep 延迟机制，防止多个 Agent 同时并发请求导致高德 API 或大模型接口触发频率限制 (Rate Limit)
-。
-无缝兼容：向外提供 attraction_node 等适配 LangGraph 格式的异步函数，并为了兼容旧版调用逻辑，保留了 WorkerManager = WorkerExecutor 的别名映射
-。
-📝 2.6 最终汇总聚合器：Planner
-作用：系统的最后一个节点，负责收尾工作
-。
-上下文聚合：自动从状态机的 messages 列表中提取最近的 10 条关键交互记录，甚至能识别 [工具调用] 信息
-。
-指令约束：通过精密的 Prompt 约束大模型，要求输出纯数字价格并根据真实数据撰写完整的旅行计划
-。
-数据防御：在解析大模型返回的 JSON 时，包含了手动的字段校验和回填逻辑（如 if "city" not in data），并在彻底解析失败时提供 _create_fallback_plan 保底预案
-。
+并发功能修改总结
+本次共修改了 5 个文件：
+---
+1. state.py - 状态定义
+- AgentState.next 改为 Union[str, List[str]]，支持单个或多个节点
+- RouteDecision 支持 next 为列表 + 新增 parallel 字段
+- 添加 merge_dicts 函数处理并发合并
+- agent_results、agent_call_count 改为 Annotated[dict, merge_dicts] 支持并发
+- attractions、weather_info、hotels、routes 改为 Annotated[list, operator.add]
+---
+2. supervisor.py - 决策逻辑
+- decide() 返回类型改为 Dict[str, Any]
+- 支持处理单个或多个节点：if decision.parallel and isinstance(decision.next, list)
+- LLM返回 {"next": ["a", "b"], "parallel": true} 时触发并发
+---
+3. graph/builder.py - 图构建
+- 新增 parallel_router() 函数，使用 Send 类实现 fan-out
+- add_conditional_edges 改用新路由器
+---
+4. agents.py - Prompt提示词
+- 添加并发执行规则说明
+- 提供 JSON 输出格式示例（转义 {{}}）
+- 引导 LLM 何时并发、何时串行
+---
+5. workers.py - Worker模块
+- 添加 get_agent_registry()、get_worker_keys() 导出函数
+- 实现节点和边的完全配置驱动
+---
+执行效果
+修改前（串行）:
+Supervisor → attraction → Supervisor → weather → Supervisor → planner
+修改后（可并发）:
+Supervisor 
+    ↓ 并发
+attraction_agent  ↔  weather_agent  (同时执行)
+    ↓
+Supervisor → planner
