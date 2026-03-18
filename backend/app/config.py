@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     unsplash_secret_key: str = ""
     unsplash_client_id: str = ""
 
+    # Serper/SerpAPI 配置
+    serpapi_key: str = ""
+
     # LLM配置 (从环境变量读取,由HelloAgents管理)
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
@@ -54,7 +57,7 @@ class Settings(BaseSettings):
 
     def get_cors_origins_list(self) -> List[str]:
         """获取CORS origins列表"""
-        return [origin.strip() for origin in self.cors_origins.split(',')]
+        return [origin.strip() for origin in self.cors_origins.split(",")]
 
 
 # 创建全局配置实例

@@ -17,7 +17,7 @@ from ..services.mcp_tools import initialize_mcp_tools, cleanup_mcp_tools
 from .supervisor import Supervisor
 from .workers import WorkerExecutor as WorkerManager, Planner, get_agent_registry
 from .graph.builder import GraphBuilder
-from .utils.parsers import parse_and_build_plan
+from .utils.parsers import parse_and_build_plan, parse_and_build_plan_async
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class MapAgentsSystem:
         self._planner = Planner(self._llm)
 
         logger.info("正在构建 StateGraph...")
-        
+
         # ✅ 动态获取所有 Worker 节点（使用 name 作为节点名）
         registry = get_agent_registry()
         worker_nodes = {}
@@ -163,7 +163,7 @@ class MapAgentsSystem:
         logger.info("✅ 规划完成")
         logger.info("=" * 60)
 
-        # 解析结果
+        # 解析结果（同步版本，不使用 Tavily 搜索）
         return parse_and_build_plan(final_state.get("final_plan"), request)
 
     async def plan_trip_async(self, request: TripRequest) -> TripPlan:
@@ -193,8 +193,8 @@ class MapAgentsSystem:
         logger.info("✅ 规划完成")
         logger.info("=" * 60)
 
-        # 解析结果
-        return parse_and_build_plan(final_state.get("final_plan"), request)
+        # 解析结果（使用 Tavily 搜索实时价格）
+        return await parse_and_build_plan_async(final_state.get("final_plan"), request)
 
     @property
     def is_initialized(self) -> bool:

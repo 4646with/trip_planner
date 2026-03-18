@@ -84,21 +84,6 @@ async def shutdown_event():
     print("=" * 60 + "\n")
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """应用关闭事件"""
-    print("\n" + "=" * 60)
-    print("👋 应用正在关闭...")
-
-    # 清理 MCP 资源
-    try:
-        await cleanup_map_agents_system()
-        print("✅ MCP 资源已清理")
-    except Exception as e:
-        print(f"⚠️  清理 MCP 资源时出错: {e}")
-
-    print("=" * 60 + "\n")
-
 
 @app.get("/")
 async def root():

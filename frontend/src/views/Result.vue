@@ -308,7 +308,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { DownOutlined } from '@ant-design/icons-vue'
@@ -326,15 +326,39 @@ const activeSection = ref('overview')
 const activeDays = ref<number[]>([0]) // 默认展开第一天
 let map: any = null
 
+// 监听 tripPlan 变化，当数据加载且 DOM 更新后初始化地图
+watch(tripPlan, async (newVal) => {
+  if (newVal) {
+    // 等待 DOM 完全渲染
+    await nextTick()
+    // 再次确认地图容器存在
+    const mapContainer = document.getElementById('amap-container')
+    if (mapContainer) {
+      console.log('检测到 tripPlan 变化，地图容器已存在，准备初始化地图')
+      // 延迟初始化以确保容器尺寸已计算
+      setTimeout(() => {
+        initMap()
+      }, 300)
+    } else {
+      console.warn('tripPlan 已设置但地图容器不存在，等待 DOM 渲染...')
+      // 如果容器不存在，再等待一下
+      setTimeout(async () => {
+        await nextTick()
+        initMap()
+      }, 500)
+    }
+  }
+}, { immediate: false })
+
 onMounted(async () => {
   const data = sessionStorage.getItem('tripPlan')
   if (data) {
     tripPlan.value = JSON.parse(data)
     // 加载景点图片
     await loadAttractionPhotos()
-    // 等待DOM渲染完成后初始化地图
-    await nextTick()
-    initMap()
+    // 注意：地图初始化现在由 watch 监听触发
+  } else {
+    console.warn('sessionStorage 中没有 tripPlan 数据')
   }
 })
 
@@ -832,10 +856,23 @@ const restoreMap = () => {
 // 初始化地图
     const initMap = async () => {
       try {
+        // 检查环境变量
+        const amapKey = import.meta.env.VITE_AMAP_WEB_JS_KEY
+        if (!amapKey) {
+          throw new Error('高德地图 Key 未配置，请检查 .env 文件中的 VITE_AMAP_WEB_JS_KEY')
+        }
+
+        // 读取安全密钥（如果配置了）
+        const securityJsCode = import.meta.env.VITE_AMAP_SECURITY_JS_CODE || ''
+        
         const AMap = await AMapLoader.load({
-          key: import.meta.env.VITE_AMAP_WEB_JS_KEY,  // 高德地图Web端(JS API) Key
+          key: amapKey,
           version: '2.0',
-          plugins: ['AMap.Marker', 'AMap.Polyline', 'AMap.InfoWindow']
+          plugins: ['AMap.Marker', 'AMap.Polyline', 'AMap.InfoWindow'],
+          // 配置安全密钥（如果启用了安全验证功能）
+          securityConfig: securityJsCode ? {
+            securityJsCode: securityJsCode
+          } : undefined
         })
 
         // 收集所有有效坐标
@@ -853,20 +890,49 @@ const restoreMap = () => {
           ? [validLocations[0].longitude, validLocations[0].latitude] 
           : [116.397128, 39.916527];
 
+        // 检查地图容器是否存在且有尺寸
+        const mapContainer = document.getElementById('amap-container')
+        if (!mapContainer) {
+          console.warn('地图容器不存在，可能 DOM 还未渲染完成，跳过初始化')
+          return  // 直接返回，不抛出错误，让 watch 下次触发时再试
+        }
+        
+        const containerRect = mapContainer.getBoundingClientRect()
+        if (containerRect.width === 0 || containerRect.height === 0) {
+          console.warn('地图容器尺寸为0，等待重试...')
+          // 延迟100ms后重试
+          setTimeout(() => initMap(), 100)
+          return
+        }
+
         // 创建地图实例
         map = new AMap.Map('amap-container', {
           zoom: 12,
           center: defaultCenter,
-          viewMode: '3D'
+          viewMode: '2D', // 使用2D模式更稳定
+          resizeEnable: true // 启用自动适应容器尺寸变化
         })
 
         // 添加景点标记
         addAttractionMarkers(AMap)
 
+        console.log('地图加载成功，中心点:', defaultCenter, '景点数量:', validLocations.length)
         message.success('地图加载成功')
-      } catch (error) {
+      } catch (error: any) {
         console.error('地图加载失败:', error)
-        message.error('地图加载失败')
+        message.error(`地图加载失败: ${error.message || '未知错误'}`)
+        
+        // 显示错误提示在地图区域
+        const mapContainer = document.getElementById('amap-container')
+        if (mapContainer) {
+          mapContainer.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; background: #f5f5f5; padding: 20px; text-align: center;">
+              <div style="font-size: 48px; margin-bottom: 16px;">🗺️</div>
+              <div style="color: #666; margin-bottom: 8px;">地图加载失败</div>
+              <div style="color: #999; font-size: 14px;">${error.message || '请检查网络连接或刷新页面重试'}</div>
+            </div>
+          `
+        }
       }
     }
 
@@ -1187,6 +1253,8 @@ const drawRoutes = (AMap: any, attractions: any[]) => {
 
 .right-map {
   flex: 1;
+  min-height: 500px;
+  display: flex;
 }
 
 /* 行程概览卡片 */
@@ -1274,11 +1342,20 @@ const drawRoutes = (AMap: any, attractions: any[]) => {
 .map-card {
   height: 100%;
   min-height: 500px;
+  width: 100%;
 }
 
 .map-card :deep(.ant-card-body) {
   height: calc(100% - 57px);
+  min-height: 443px;
   padding: 0;
+}
+
+/* 地图容器 */
+#amap-container {
+  width: 100%;
+  height: 100%;
+  min-height: 443px;
 }
 
 /* 每日行程卡片 */
