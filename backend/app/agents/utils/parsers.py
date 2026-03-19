@@ -6,8 +6,10 @@ from typing import Union, Optional, Dict, Any, List
 from pydantic import ValidationError
 
 from ...models.schemas import TripRequest, TripPlan, Budget
-from ...services.serper_service import serper_service
-from ...config import settings
+from ...services.bocha_search_service import (
+    search_attraction_prices,
+    search_hotel_prices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +109,16 @@ def calculate_budget(data: Dict[str, Any]) -> Dict[str, int]:
             if isinstance(cost, (int, float)) and cost >= 0:
                 total_meal += cost
 
-    # 累加酒店费用
-    for hotel in data.get("hotels", []):
+    # 累加酒店费用（从 days 数组中提取）
+    hotels = []
+    for day in data.get("days", []):
+        if day.get("hotel"):
+            hotels.append(day["hotel"])
+    # 兼容旧格式
+    if not hotels:
+        hotels = data.get("hotels", [])
+
+    for hotel in hotels:
         price = hotel.get("price", 0) or hotel.get("estimated_cost", 0)
         if isinstance(price, (int, float)) and price >= 0:
             total_hotel += price
@@ -142,12 +152,12 @@ async def calculate_budget_with_search(
     city: str, data: Dict[str, Any]
 ) -> Dict[str, int]:
     """
-    使用 Serper 搜索计算预算（获取实时价格）
-    
+    使用博查搜索计算预算（获取实时价格）
+
     Args:
         city: 城市名称
         data: 包含 days 数组的旅行数据
-        
+
     Returns:
         预算字典
     """
@@ -155,10 +165,9 @@ async def calculate_budget_with_search(
     total_meal = 0
     total_hotel = 0
     total_transport = 0
-    
-    logger.info(f"开始使用 Serper 搜索计算预算... 城市: {city}")
-    
-    # 收集所有需要搜索价格的景点
+
+    logger.info(f"开始使用博查搜索计算预算... 城市: {city}")
+
     attractions_to_search = []
     for day in data.get("days", []):
         for attr in day.get("attractions", []):
@@ -166,134 +175,90 @@ async def calculate_budget_with_search(
             existing_price = attr.get("ticket_price", 0)
             if name and (not existing_price or existing_price <= 0):
                 attractions_to_search.append(attr)
-    
-    # 搜索景点价格
-    if attractions_to_search and serper_service.api_key:
-        logger.info(f"搜索 {len(attractions_to_search)} 个景点价格...")
-        for attr in attractions_to_search:
-            price = await serper_service.search_attraction_price(attr["name"], city)
-            if price is not None:
-                attr["ticket_price"] = price
-                logger.info(f"✓ 景点 '{attr['name']}' 价格: {price}元")
-            else:
-                # 如果搜索失败，根据景点类型设置默认价格
-                name = attr["name"]
-                if "邮轮" in name or "游艇" in name or "游轮" in name:
-                    attr["ticket_price"] = 1500  # 邮轮体验默认1500元
-                    logger.warning(f"✗ 景点 '{name}' 价格搜索失败，使用奢华邮轮默认值 1500元")
-                elif "博物馆" in name or "展览" in name:
-                    attr["ticket_price"] = 150  # 高端展览默认150元
-                    logger.warning(f"✗ 景点 '{name}' 价格搜索失败，使用展览默认值 150元")
-                else:
-                    # 商场、公园等通常是免费的
-                    attr["ticket_price"] = 0
-                    logger.info(f"✓ 景点 '{name}' 可能是免费景点，设为0元")
 
-    # 计算景点门票
+    if attractions_to_search:
+        logger.info(f"搜索 {len(attractions_to_search)} 个景点价格...")
+        prices = await search_attraction_prices(city, attractions_to_search)
+        for attr in attractions_to_search:
+            name = attr.get("name", "")
+            if name in prices:
+                attr["ticket_price"] = prices[name]
+                logger.info(f"OK '{attr['name']}' price: {prices[name]}")
+            else:
+                attr["ticket_price"] = attr.get("ticket_price", 0)
+
     for day in data.get("days", []):
         for attr in day.get("attractions", []):
             price = attr.get("ticket_price", 0)
             if isinstance(price, (int, float)) and price >= 0:
                 total_attr += int(price)
 
-    # 计算餐饮费用（奢华体验标准）
-    # 根据 meals 中已有的 estimated_cost 计算，如果没有则搜索或估算
     for day in data.get("days", []):
         for meal in day.get("meals", []):
             existing_cost = meal.get("estimated_cost", 0)
             if existing_cost and existing_cost > 0:
-                # 使用已提供的餐饮价格
                 total_meal += int(existing_cost)
-                logger.info(f"✓ 餐饮 '{meal.get('name', '未知')}' 价格: {existing_cost}元")
-            elif serper_service.api_key:
-                # 搜索该餐厅的价格
-                restaurant_name = meal.get("name", "")
-                price = await serper_service.search_meal_price(restaurant_name, city, "人均")
-                if price and price >= 100:  # 奢华餐厅至少100+
-                    meal["estimated_cost"] = price
-                    total_meal += price
-                    logger.info(f"✓ 餐饮 '{restaurant_name}' 搜索到价格: {price}元")
-                else:
-                    # 奢华体验默认值
-                    default_price = 500
-                    meal["estimated_cost"] = default_price
-                    total_meal += default_price
-                    logger.warning(f"✗ 餐饮 '{restaurant_name}' 价格搜索失败，使用奢华默认值 {default_price}元")
             else:
-                # 没有API key，使用奢华默认值
-                default_price = 500
-                meal["estimated_cost"] = default_price
-                total_meal += default_price
+                meal["estimated_cost"] = "*"
 
-    # 计算酒店费用
-    hotels = data.get("hotels", [])
-    days_count = len(data.get("days", []))
-    
+    hotels = []
+    for day in data.get("days", []):
+        if day.get("hotel"):
+            hotels.append(day["hotel"])
+
+    if not hotels:
+        hotels = data.get("hotels", [])
+
+    hotels_to_search = []
     for hotel in hotels:
         name = hotel.get("name", "")
         existing_price = hotel.get("price", 0) or hotel.get("estimated_cost", 0)
         price_range = hotel.get("price_range", "")
-        
+
         if isinstance(existing_price, (int, float)) and existing_price > 0:
-            # 如果已经有价格，直接使用
             total_hotel += int(existing_price)
-            logger.info(f"✓ 酒店 '{name}' 已有价格: {existing_price}元/晚")
         elif price_range:
-            # 从 price_range 提取价格（如"2600-5800元"）
             import re
-            numbers = re.findall(r'(\d+)', price_range)
+
+            numbers = re.findall(r"(\d+)", price_range)
             if numbers:
-                # 取最高价格作为奢华体验的标准
                 max_price = max([int(n) for n in numbers])
                 hotel["price"] = max_price
                 total_hotel += max_price
-                logger.info(f"✓ 酒店 '{name}' 从 price_range 提取价格: {max_price}元/晚")
             else:
-                # 使用默认值（奢华体验标准）
-                default_price = 3000
-                hotel["price"] = default_price
-                total_hotel += default_price
-                logger.warning(f"✗ 酒店 '{name}' 无法解析 price_range，使用默认奢华价格 {default_price}元/晚")
-        elif name and serper_service.api_key:
-            # 尝试搜索价格
-            price = await serper_service.search_hotel_price(name, city)
-            if price and price >= 1000:  # 奢华酒店至少1000+
-                hotel["price"] = price
-                total_hotel += price
-                logger.info(f"✓ 酒店 '{name}' 搜索到价格: {price}元/晚")
-            else:
-                # 奢华体验默认值
-                default_price = 3000
-                hotel["price"] = default_price
-                total_hotel += default_price
-                logger.warning(f"✗ 酒店 '{name}' 价格搜索失败，使用默认奢华价格 {default_price}元/晚")
-        else:
-            # 没有酒店名或没有API key，使用默认值
-            default_price = 3000
-            hotel["price"] = default_price
-            total_hotel += default_price
+                hotel["price"] = "*"
+        elif name:
+            hotels_to_search.append(hotel)
 
-    # 计算交通费用
+    if hotels_to_search:
+        hotel_prices = await search_hotel_prices(city, hotels_to_search)
+        for hotel in hotels_to_search:
+            name = hotel.get("name", "")
+            if name in hotel_prices:
+                hotel["price"] = hotel_prices[name]
+                total_hotel += hotel_prices[name]
+
     for route in data.get("routes", []):
-        cost = route.get("distance_cost", 0) or route.get("estimated_cost", 0)
-        if isinstance(cost, (int, float)) and cost >= 0:
+        cost = route.get("estimated_cost", 0)
+        if isinstance(cost, (int, float)) and cost > 0:
             total_transport += int(cost)
 
-    # 如果没有交通费用，根据行程天数和奢华标准估算
     if total_transport == 0:
-        # 奢华体验：每天打车费用约 200-300元
-        total_transport = days_count * 250
-        logger.info(f"交通费用未提供，按奢华标准 {days_count} 天估算: {total_transport}元")
+        for day in data.get("days", []):
+            daily_cost = day.get("daily_transport_cost", 0)
+            if isinstance(daily_cost, (int, float)) and daily_cost > 0:
+                total_transport += int(daily_cost)
 
     budget = {
         "total_attractions": total_attr,
         "total_hotels": total_hotel,
         "total_meals": total_meal,
         "total_transportation": total_transport,
-        "total": total_attr + total_meal + total_hotel + total_transport + 100,
+        "total": total_attr + total_meal + total_hotel + total_transport,
     }
 
-    logger.info(f"✅ Tavily 预算计算完成: {budget}")
+    print(f"Budget calculation completed: {budget}")
+    logger.info(f"Budget calculation completed: {budget}")
     return budget
 
 
@@ -415,19 +380,12 @@ def parse_and_build_plan(json_data: Union[dict, str], request: TripRequest) -> T
 
 async def build_trip_plan_async(data: Dict[str, Any], request: TripRequest) -> TripPlan:
     """
-    构建 TripPlan 对象（异步版本，使用 Tavily 搜索实时价格）
-
-    Args:
-        data: 解析后的旅行数据字典
-        request: 原始请求对象
-
-    Returns:
-        TripPlan 对象
+    构建 TripPlan 对象（异步版本，使用博查搜索实时价格）
     """
     city = data.get("city", request.city)
 
-    # 使用 Tavily 搜索计算预算
     budget_data = await calculate_budget_with_search(city, data)
+    print(f"Budget result: {budget_data}")
 
     # 处理 overall_suggestions
     overall_suggestions = data.get("overall_suggestions", "")
@@ -460,14 +418,7 @@ async def parse_and_build_plan_async(
     json_data: Union[dict, str], request: TripRequest
 ) -> TripPlan:
     """
-    一站式解析和构建 TripPlan（异步版本，使用 Tavily 搜索）
-
-    Args:
-        json_data: JSON 数据（字典或字符串）
-        request: 原始请求对象
-
-    Returns:
-        TripPlan 对象
+    一站式解析和构建 TripPlan（异步版本，使用博查搜索）
     """
     # 尝试解析 JSON
     data = parse_json_to_dict(json_data)

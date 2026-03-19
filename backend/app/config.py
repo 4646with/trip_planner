@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # Serper/SerpAPI 配置
     serpapi_key: str = ""
 
+    # 百度搜索 API 配置
+    baidu_api_key: str = ""
+
     # LLM配置 (从环境变量读取,由HelloAgents管理)
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"

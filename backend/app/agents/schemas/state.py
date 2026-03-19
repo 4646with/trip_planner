@@ -13,16 +13,15 @@ def merge_dicts(a: dict, b: dict) -> dict:
     return result
 
 
-class AgentState(TypedDict):
-    """
-    全图共享状态 - 精简版
+def merge_errors(a: list, b: list) -> list:
+    """合并错误列表，用于并发节点同时写入错误时不丢失"""
+    return a + b
 
-    改进点：
-    - 移除临时数据字段（attraction_data, weather_data 等）
-    - 利用 messages 传递上下文和历史信息
-    - 保留核心配置和决策字段
-    - 支持并发路由
-    """
+
+class AgentState(TypedDict):
+    # ── 元信息 ──────────────────────────────────────────────
+    schema_version: int
+    request_id: str
 
     # 消息历史（核心通信机制）
     messages: Annotated[List[BaseMessage], operator.add]
@@ -49,22 +48,18 @@ class AgentState(TypedDict):
     # 最终输出
     final_plan: dict
 
-    # 调用计数（用于防重复调用）- 支持并发合并
+    # 调用计数（用于防重复调用）
     agent_call_count: Annotated[dict, merge_dicts]
 
-    # Agent 执行结果状态（用于判断是否有有效结果）- 支持并发合并
-    # 格式: {"agent_name": {"called": bool, "success": bool}}
+    # Agent 执行结果状态
     agent_results: Annotated[dict, merge_dicts]
+
+    # ── 错误收集 ─────────────────────────────────────────────
+    # 格式：[{"agent": "search_agent", "error": "未获取到有效数据", "fatal": False}]
+    errors: Annotated[List[dict], merge_errors]
 
 
 class RouteDecision(BaseModel):
-    """
-    Supervisor 决策结果 - 强类型输出
-
-    使用 Pydantic 模型确保 LLM 输出符合预期结构
-    支持单个节点或多个节点（并发）
-    """
-
     next: Union[str, List[str]] = Field(
         ..., description="下一步要调用的 Agent 名称，支持单个或列表"
     )

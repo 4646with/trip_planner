@@ -1,10 +1,15 @@
-"""MCP 工具管理模块 - 共享 MCP 服务器实例"""
+"""MCP 工具管理模块 - 共享 MCP 服务器实例
+
+相对上一版的改动：
+1. 删除 MCPToolsManagerWithRetry 子类（猴子补丁方式存在 session 重建后丢失的风险）
+2. 重试逻辑移入 create_tool_wrapper，每个工具调用天然具备重试能力
+3. 全局单例直接使用 MCPToolsManager，代码减少约 30 行
+"""
 
 import asyncio
 import os
-import functools
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
@@ -22,14 +27,10 @@ logger = logging.getLogger(__name__)
 
 
 class WeatherToolInput(BaseModel):
-    """天气查询工具输入参数"""
-
     city: str = Field(..., description="完整的城市名称，如 '北京市' 或 '深圳'")
 
 
 class TextSearchToolInput(BaseModel):
-    """文本搜索工具输入参数"""
-
     keywords: str = Field(..., description="搜索关键词，如 '景点'、'酒店'")
     city: str = Field(..., description="城市名称，如 '北京'、'深圳'")
     citylimit: bool = Field(default=True, description="是否限制在城市范围内搜索")
@@ -37,48 +38,68 @@ class TextSearchToolInput(BaseModel):
 
 
 class DirectionToolInput(BaseModel):
-    """路线规划工具输入参数（支持公交/步行/驾车/骑行）"""
-
     origin: str = Field(..., description="起点地址")
     destination: str = Field(..., description="终点地址")
     city: str = Field(..., description="城市名称")
 
 
 class SearchDetailToolInput(BaseModel):
-    """POI详情查询工具输入参数"""
-
     id: str = Field(..., description="POI ID")
 
 
 # ==========================================
-# 工具包装器函数
+# 工具包装器
 # ==========================================
+
+_SCHEMA_MAPPING: Dict[str, type] = {
+    "maps_weather": WeatherToolInput,
+    "maps_text_search": TextSearchToolInput,
+    "maps_direction_transit": DirectionToolInput,
+    "maps_direction_walking": DirectionToolInput,
+    "maps_direction_driving": DirectionToolInput,
+    "maps_direction_bicycling": DirectionToolInput,
+    "maps_search_detail": SearchDetailToolInput,
+}
+
+
+def register_tool_schemas(extra_schemas: Dict[str, type]) -> None:
+    """注册额外的工具 schema（由 workers.py 调用）"""
+    _SCHEMA_MAPPING.update(extra_schemas)
 
 
 def create_tool_wrapper(
-    mcp_tool: BaseTool, args_schema: BaseModel, tool_name: str
+    mcp_tool: BaseTool,
+    args_schema: type,
+    tool_name: str,
+    max_retries: int = 3,
+    retry_delay: float = 1.0,
 ) -> StructuredTool:
     """
-    为 MCP 工具创建包装器，添加明确的参数 schema
+    为 MCP 工具创建包装器，内置重试逻辑。
 
-    Args:
-        mcp_tool: 原始 MCP 工具
-        args_schema: 参数 schema
-        tool_name: 工具名称
-
-    Returns:
-        包装后的 StructuredTool
+    重试逻辑放在这里而不是 MCPToolsManager 子类的原因：
+    - 子类用猴子补丁替换 session.call_tool，session 重建后补丁丢失
+    - 包装器与 session 生命周期无关，重试能力始终有效
     """
 
     async def wrapper(**kwargs) -> str:
-        """工具包装器，确保参数正确传递"""
-        try:
-            # 调用底层 MCP 工具
-            result = await mcp_tool.ainvoke(kwargs)
-            return result
-        except Exception as e:
-            logger.error(f"工具 {tool_name} 调用失败: {e}")
-            raise
+        last_error: Optional[Exception] = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                return await mcp_tool.ainvoke(kwargs)
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    logger.warning(
+                        f"[{tool_name}] 调用失败 ({attempt}/{max_retries}): "
+                        f"{str(e)[:100]}，{retry_delay}s 后重试..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error(
+                        f"[{tool_name}] 已重试 {max_retries} 次，全部失败: {e}"
+                    )
+        raise last_error
 
     return StructuredTool(
         name=tool_name,
@@ -90,48 +111,32 @@ def create_tool_wrapper(
 
 
 def wrap_mcp_tools(mcp_tools: List[BaseTool]) -> List[BaseTool]:
-    """
-    为所有 MCP 工具创建包装器
-
-    Args:
-        mcp_tools: 原始 MCP 工具列表
-
-    Returns:
-        包装后的工具列表
-    """
-    # 工具名称到 schema 的映射
-    schema_mapping = {
-        "maps_weather": WeatherToolInput,
-        "maps_text_search": TextSearchToolInput,
-        "maps_direction_transit": DirectionToolInput,
-        "maps_direction_walking": DirectionToolInput,
-        "maps_direction_driving": DirectionToolInput,
-        "maps_direction_bicycling": DirectionToolInput,
-        "maps_search_detail": SearchDetailToolInput,
-    }
-
-    wrapped_tools = []
+    """为所有 MCP 工具创建包装器"""
+    wrapped = []
     for tool in mcp_tools:
-        if tool.name in schema_mapping:
-            # 创建包装器
+        if tool.name in _SCHEMA_MAPPING:
             wrapped_tool = create_tool_wrapper(
-                tool, schema_mapping[tool.name], tool.name
+                tool, _SCHEMA_MAPPING[tool.name], tool.name
             )
-            wrapped_tools.append(wrapped_tool)
-            logger.info(f"已为工具 {tool.name} 创建包装器")
+            wrapped.append(wrapped_tool)
+            logger.info(f"[MCP] 已包装工具: {tool.name}")
         else:
-            # 对于没有定义 schema 的工具，直接使用原始工具
-            wrapped_tools.append(tool)
-            logger.info(f"工具 {tool.name} 使用原始版本")
+            wrapped.append(tool)
+            logger.info(f"[MCP] 工具 {tool.name} 使用原始版本（无 schema 定义）")
+    return wrapped
 
-    return wrapped_tools
+
+# ==========================================
+# MCPToolsManager - 单例
+# ==========================================
 
 
 class MCPToolsManager:
     """
     MCP 工具管理器
 
-    管理高德 MCP 服务器的生命周期，所有智能体共享同一个 MCP 服务器进程
+    管理高德 MCP 服务器的生命周期，所有 Agent 共享同一个 MCP 服务器进程。
+    重试逻辑已下沉至 create_tool_wrapper，此类只负责生命周期管理。
     """
 
     _instance: Optional["MCPToolsManager"] = None
@@ -145,11 +150,9 @@ class MCPToolsManager:
     def __init__(self):
         if MCPToolsManager._initialized:
             return
-
         self._session: Optional[ClientSession] = None
         self._tools: List[BaseTool] = []
         self._tools_dict: Dict[str, BaseTool] = {}
-        self._server_params: Optional[StdioServerParameters] = None
         self._client_context = None
         self._session_context = None
         MCPToolsManager._initialized = True
@@ -162,67 +165,49 @@ class MCPToolsManager:
             return
 
         settings = get_settings()
-
         if not settings.amap_api_key:
             raise ValueError("未配置高德地图 API Key，请在环境变量中设置 AMAP_API_KEY")
 
-        self._server_params = StdioServerParameters(
+        server_params = StdioServerParameters(
             command="npx",
             args=["-y", "@amap/amap-maps-mcp-server"],
             env={
                 "AMAP_MAPS_API_KEY": settings.amap_api_key,
-                "AMAP_API_KEY": settings.amap_api_key,  # 也设置 AMAP_API_KEY 作为备用
+                "AMAP_API_KEY": settings.amap_api_key,
                 **dict(os.environ),
             },
         )
 
         logger.info("正在启动高德 MCP 服务器...")
-
         try:
-            logger.info("创建 MCP 客户端上下文...")
-            self._client_context = stdio_client(self._server_params)
-
-            logger.info("进入客户端上下文...")
+            self._client_context = stdio_client(server_params)
             self._read, self._write = await self._client_context.__aenter__()
 
-            logger.info("创建 MCP 会话...")
             self._session_context = ClientSession(self._read, self._write)
-
-            logger.info("进入会话上下文...")
             self._session = await self._session_context.__aenter__()
-
-            logger.info("初始化 MCP 会话...")
             await self._session.initialize()
 
-            logger.info("加载 MCP 工具...")
             raw_tools = await load_mcp_tools(self._session)
-
-            # 为工具创建包装器，添加明确的参数 schema
-            logger.info("为 MCP 工具创建包装器...")
             self._tools = wrap_mcp_tools(raw_tools)
             self._tools_dict = {tool.name: tool for tool in self._tools}
 
-            logger.info(f"MCP 服务器初始化成功，共加载 {len(self._tools)} 个工具")
-            logger.info(f"已加载的工具: {list(self._tools_dict.keys())}")
-
+            logger.info(
+                f"MCP 服务器初始化成功，共加载 {len(self._tools)} 个工具: "
+                f"{list(self._tools_dict.keys())}"
+            )
         except Exception as e:
-            logger.error(f"MCP 服务器初始化失败: {e}")
-            import traceback
-
-            traceback.print_exc()
+            logger.error(f"MCP 服务器初始化失败: {e}", exc_info=True)
             await self.cleanup()
             raise
 
     async def cleanup(self) -> None:
         """清理 MCP 服务器资源"""
         logger.info("正在清理 MCP 服务器资源...")
-
         if self._session_context:
             try:
                 await self._session_context.__aexit__(None, None, None)
             except Exception as e:
                 logger.warning(f"关闭会话时出错: {e}")
-
         if self._client_context:
             try:
                 await self._client_context.__aexit__(None, None, None)
@@ -237,67 +222,44 @@ class MCPToolsManager:
         logger.info("MCP 服务器资源已清理")
 
     def get_tools(self) -> List[BaseTool]:
-        """获取所有可用工具"""
         return self._tools
 
     def get_tools_by_names(self, names: List[str]) -> List[BaseTool]:
-        """根据名称获取指定工具"""
-        return [self._tools_dict[name] for name in names if name in self._tools_dict]
+        missing = [n for n in names if n not in self._tools_dict]
+        if missing:
+            logger.warning(f"[MCP] 以下工具未找到: {missing}")
+        return [self._tools_dict[n] for n in names if n in self._tools_dict]
 
     def list_available_tools(self) -> List[str]:
-        """列出所有可用工具名称"""
         return list(self._tools_dict.keys())
 
     @property
     def is_initialized(self) -> bool:
-        """检查是否已初始化"""
         return self._session is not None
 
 
-class MCPToolsManagerWithRetry(MCPToolsManager):
-    """带重试机制的 MCP 工具管理器"""
+# ==========================================
+# 全局单例 + 便捷函数
+# ==========================================
 
-    async def initialize(self) -> None:
-        await super().initialize()
-        if self._session and not hasattr(self, "_original_call_tool"):
-            self._original_call_tool = self._session.call_tool
-
-            async def safe_call_tool(name, arguments=None, **kwargs):
-                for attempt in range(3):
-                    try:
-                        return await self._original_call_tool(name, arguments, **kwargs)
-                    except Exception as e:
-                        if attempt == 2:
-                            raise
-                        logger.warning(
-                            f"⚠️ 工具 {name} 调用失败 ({attempt + 1}/3): {str(e)[:100]}"
-                        )
-                        await asyncio.sleep(1)
-
-            self._session.call_tool = safe_call_tool
-            logger.info("✅ 已添加 MCP 工具重试机制")
+_mcp_manager: Optional[MCPToolsManager] = None
 
 
-_mcp_manager: Optional[MCPToolsManagerWithRetry] = None
-
-
-def get_mcp_manager() -> MCPToolsManagerWithRetry:
+def get_mcp_manager() -> MCPToolsManager:
     """获取 MCP 工具管理器单例"""
     global _mcp_manager
     if _mcp_manager is None:
-        _mcp_manager = MCPToolsManagerWithRetry()
+        _mcp_manager = MCPToolsManager()
     return _mcp_manager
 
 
-async def initialize_mcp_tools() -> MCPToolsManagerWithRetry:
-    """初始化 MCP 工具"""
+async def initialize_mcp_tools() -> MCPToolsManager:
     manager = get_mcp_manager()
     await manager.initialize()
     return manager
 
 
 async def cleanup_mcp_tools() -> None:
-    """清理 MCP 工具"""
     global _mcp_manager
     if _mcp_manager:
         await _mcp_manager.cleanup()

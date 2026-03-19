@@ -7,6 +7,7 @@
 """
 
 import logging
+import uuid
 from typing import Optional
 
 from langchain_core.messages import HumanMessage
@@ -18,6 +19,7 @@ from .supervisor import Supervisor
 from .workers import WorkerExecutor as WorkerManager, Planner, get_agent_registry
 from .graph.builder import GraphBuilder
 from .utils.parsers import parse_and_build_plan, parse_and_build_plan_async
+from .utils.trip_store import get_trip_plan_store
 
 logger = logging.getLogger(__name__)
 
@@ -102,22 +104,15 @@ class MapAgentsSystem:
         logger.info("✅ 系统资源已清理")
 
     def _build_initial_state(self, request: TripRequest) -> dict:
-        """
-        构建初始状态
-
-        Args:
-            request: 旅行请求
-
-        Returns:
-            初始状态字典
-        """
-        # 构建初始消息
         initial_message = f"我要去{request.city}玩{request.travel_days}天。"
         if request.free_text_input:
             initial_message += f" 额外要求：{request.free_text_input}"
 
         return {
+            "schema_version": 1,
+            "request_id": str(uuid.uuid4()),
             "messages": [HumanMessage(content=initial_message)],
+            "next": "supervisor",
             "city": request.city,
             "start_date": request.start_date,
             "end_date": request.end_date,
@@ -126,9 +121,9 @@ class MapAgentsSystem:
             "accommodation": request.accommodation,
             "preferences": request.preferences,
             "free_text_input": request.free_text_input,
-            "next": "supervisor",
             "agent_call_count": {},
             "agent_results": {},
+            "errors": [],
             "attractions": [],
             "weather_info": [],
             "hotels": [],
@@ -167,34 +162,38 @@ class MapAgentsSystem:
         return parse_and_build_plan(final_state.get("final_plan"), request)
 
     async def plan_trip_async(self, request: TripRequest) -> TripPlan:
-        """
-        规划旅行（异步接口）
-
-        Args:
-            request: 旅行请求
-
-        Returns:
-            旅行计划
-        """
         if not self._initialized or self._graph is None:
             raise RuntimeError("系统未初始化，请先调用 initialize()")
 
-        # 构建初始状态
         initial_state = self._build_initial_state(request)
+        rid = initial_state["request_id"]
+        logger.info(f"[{rid}] 启动多智能体规划: {request.city} {request.travel_days}天")
 
-        logger.info("=" * 60)
-        logger.info("🚀 启动多智能体协作（异步模式）...")
-        logger.info("=" * 60)
-
-        # 异步执行图
         final_state = await self._graph.ainvoke(initial_state)
 
-        logger.info("=" * 60)
-        logger.info("✅ 规划完成")
-        logger.info("=" * 60)
+        errors = final_state.get("errors", [])
+        if errors:
+            logger.warning(f"[{rid}] 规划完成，但有 {len(errors)} 个错误: {errors}")
+        else:
+            logger.info(f"[{rid}] 规划完成，无错误")
 
-        # 解析结果（使用 Tavily 搜索实时价格）
-        return await parse_and_build_plan_async(final_state.get("final_plan"), request)
+        result = await parse_and_build_plan_async(
+            final_state.get("final_plan"), request
+        )
+
+        try:
+            from .utils.trip_store import get_trip_plan_store
+
+            get_trip_plan_store().save(
+                city=request.city,
+                travel_days=request.travel_days,
+                plan=result.model_dump(),
+            )
+            logger.info(f"[{rid}] 行程已落库")
+        except Exception as e:
+            logger.warning(f"[{rid}] 行程落库失败（不影响用户结果）: {e}")
+
+        return result
 
     @property
     def is_initialized(self) -> bool:

@@ -3,9 +3,8 @@
 from .agents import (
     AgentPrompts,
     SUPERVISOR_PROMPT,
-    ATTRACTION_AGENT_PROMPT,
+    SEARCH_AGENT_PROMPT,
     WEATHER_AGENT_PROMPT,
-    HOTEL_AGENT_PROMPT,
     ROUTE_AGENT_PROMPT,
     PLANNER_AGENT_PROMPT,
 )
@@ -13,9 +12,8 @@ from .agents import (
 __all__ = [
     "AgentPrompts",
     "SUPERVISOR_PROMPT",
-    "ATTRACTION_AGENT_PROMPT",
+    "SEARCH_AGENT_PROMPT",
     "WEATHER_AGENT_PROMPT",
-    "HOTEL_AGENT_PROMPT",
     "ROUTE_AGENT_PROMPT",
     "PLANNER_AGENT_PROMPT",
 ]

@@ -9,11 +9,10 @@ class AgentPrompts:
     # ========== Supervisor 提示词 ==========
     SUPERVISOR = """你是一个专业的旅行规划团队的监督者（Supervisor）。
 你的团队有以下专家：
-- attraction_agent: 负责搜索目的地景点信息
-- weather_agent: 负责查询目的地天气
-- hotel_agent: 负责搜索和推荐住宿酒店
-- route_agent: 负责规划具体的交通路线
-- planner_agent: 负责根据以上信息，最终汇总生成结构化的旅行行程单
+- search_agent: 搜索景点和酒店（两类数据一次获取）
+- weather_agent: 查询目的地天气预报
+- route_agent: 规划具体的交通路线（依赖 search_agent 结果）
+- planner_agent: 汇总所有数据，生成最终行程单
 
 当前任务信息：
 目的地: {city}
@@ -27,10 +26,10 @@ class AgentPrompts:
 - 酒店数据: {hotels_status}
 - 路线数据: {routes_status}
 
-【重要】并发执行规则：
-1. 如果多个数据源之间没有依赖关系（如景点和天气、酒店和天气），可以并发获取
-2. 路线规划(route_agent)依赖于景点信息，必须在景点获取完成后才能执行
-3. 只有当所有必要数据都收集完毕后，才输出 planner_agent
+【重要】调度规则：
+1. search_agent / weather_agent 互不依赖，可以并发执行
+2. route_agent 依赖 search_agent（需要景点坐标），search_agent 未完成时不得调度
+3. 所有数据就绪后调度 planner_agent
 
 请按以下JSON格式输出决策：
 ```json
@@ -42,20 +41,24 @@ class AgentPrompts:
 ```
 
 示例：
-- 并发获取: {{"next": ["attraction_agent", "weather_agent"], "parallel": true, "reasoning": "景点和天气查询互不依赖，可以并发"}}
-- 串行执行: {{"next": "attraction_agent", "parallel": false, "reasoning": "需要先获取景点信息"}}
+- 并发获取: {{"next": ["search_agent", "weather_agent"], "parallel": true, "reasoning": "景点酒店和天气查询互不依赖，可以并发"}}
+- 串行执行: {{"next": "route_agent", "parallel": false, "reasoning": "需要先获取景点和酒店信息"}}
 - 汇总: {{"next": "planner_agent", "parallel": false, "reasoning": "所有数据已收集完毕"}}
 """
 
-    # ========== Attraction Agent 提示词 ==========
-    ATTRACTION = """你是后台景点数据获取节点。
+    # ========== Search Agent 提示词（合并景点+酒店） ==========
+    SEARCH = """你是后台搜索数据获取节点。
 
 目的地：{city}
+住宿要求：{accommodation}
 
 任务：
-1. 调用 maps_text_search 工具搜索景点
-2. 调用 maps_search_detail 获取详细POI信息
-3. 将结果解析为结构化数据
+1. 调用 maps_text_search 搜索景点（keywords="热门景点"）
+2. 调用 maps_text_search 搜索酒店（keywords="{accommodation}酒店"）
+3. 对重要景点和酒店调用 maps_search_detail 获取详情
+4. 将结果分别整理成结构化数据
+
+注意：景点和酒店是两次独立搜索，分别调用工具，不要混在一起。
 
 输出格式（必须返回纯JSON，不要有其他文字）：
 {{
@@ -69,6 +72,15 @@ class AgentPrompts:
       "description": "景点描述",
       "category": "景点",
       "ticket_price": 0
+    }}
+  ],
+  "hotels": [
+    {{
+      "name": "酒店名称",
+      "address": "酒店地址",
+      "price_range": "300-500元",
+      "rating": 4.5,
+      "distance": "距离景点xxx米"
     }}
   ]
 }}
@@ -95,29 +107,6 @@ class AgentPrompts:
       "night_temp": 24,
       "wind_direction": "东南风",
       "wind_power": "3级"
-    }}
-  ]
-}}
-"""
-
-    # ========== Hotel Agent 提示词 ==========
-    HOTEL = """你是后台酒店数据获取节点。
-
-目的地：{city}
-
-任务：
-1. 调用 maps_text_search 工具搜索酒店
-2. 将结果解析为结构化数据
-
-输出格式（必须返回纯JSON，不要有其他文字）：
-{{
-  "hotels": [
-    {{
-      "name": "酒店名称",
-      "address": "酒店地址",
-      "price_range": "300-500元",
-      "rating": 4.5,
-      "distance": "距离景点xxx米"
     }}
   ]
 }}
@@ -180,7 +169,28 @@ class AgentPrompts:
           "name": "餐厅名称",
           "estimated_cost": 50
         }
-      ]
+      ],
+      "hotel": {
+        "name": "酒店名称",
+        "address": "酒店地址",
+        "price_range": "300-500元",
+        "rating": "4.8",
+        "distance": "距离景点约500米",
+        "type": "豪华酒店",
+        "estimated_cost": 800
+      },
+      "daily_transport_cost": 50
+    }
+  ],
+  "routes": [
+    {
+      "origin": "起点",
+      "destination": "终点",
+      "transportation": "驾车/步行/公交",
+      "duration": 30,
+      "distance": "10公里",
+      "route_detail": "路线详情",
+      "estimated_cost": 30
     }
   ],
   "weather_info": [
@@ -207,16 +217,18 @@ class AgentPrompts:
 注意：
 1. ticket_price 和 estimated_cost 必须是纯数字
 2. weather_info 从提供的天气数据中获取
-3. budget 字段不需要你计算
+3. routes 中的 estimated_cost 必须根据交通方式和距离估算：步行=0，公交/地铁约10-20元，打车约2-4元/公里
+4. daily_transport_cost 是当天所有交通费用之和
+5. 如果全是步行路线，景点集中，不需要交通费；如果有驾车/打车，景点分散，需要估算费用
+6. budget 字段不需要你计算
 """
 
     @classmethod
     def get_prompt(cls, agent_name: str, **kwargs) -> str:
         prompt_map = {
             "supervisor": cls.SUPERVISOR,
-            "attraction": cls.ATTRACTION,
+            "search": cls.SEARCH,
             "weather": cls.WEATHER,
-            "hotel": cls.HOTEL,
             "route": cls.ROUTE,
             "planner": cls.PLANNER,
         }
@@ -229,9 +241,8 @@ class AgentPrompts:
 
 
 SUPERVISOR_PROMPT = AgentPrompts.SUPERVISOR
-ATTRACTION_AGENT_PROMPT = AgentPrompts.ATTRACTION
+SEARCH_AGENT_PROMPT = AgentPrompts.SEARCH
 WEATHER_AGENT_PROMPT = AgentPrompts.WEATHER
-HOTEL_AGENT_PROMPT = AgentPrompts.HOTEL
 ROUTE_AGENT_PROMPT = AgentPrompts.ROUTE
 PLANNER_AGENT_PROMPT = AgentPrompts.PLANNER
 
