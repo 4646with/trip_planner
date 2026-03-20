@@ -20,6 +20,7 @@ from langgraph.prebuilt import create_react_agent
 from .schemas.state import AgentState
 from .prompts.agents import AgentPrompts
 from ..services.mcp_tools import get_mcp_manager, AmapTools
+from .tools import web_search
 from ..models.schemas import TripPlan
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ AGENT_REGISTRY = {
     "attraction": {
         "name": "attraction_agent",
         "prompt": AgentPrompts.ATTRACTION,
-        "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL],
+        "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL, web_search],
         "output_key": "attractions",
     },
     "weather": {
@@ -44,7 +45,7 @@ AGENT_REGISTRY = {
     "hotel": {
         "name": "hotel_agent",
         "prompt": AgentPrompts.HOTEL,
-        "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL],
+        "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL, web_search],
         "output_key": "hotels",
     },
     "route": {
