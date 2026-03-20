@@ -115,6 +115,55 @@ def parse_agent_output(text: str) -> dict:
     return {"success": False, "data": {}, "raw_text": text}
 
 
+def parse_and_validate(text: str, config: dict) -> list:
+    """
+    解析并验证 Agent 输出
+
+    Args:
+        text: Agent 返回的文本（包含 JSON）
+        config: Agent 配置，必须包含 output_key
+
+    Returns:
+        验证后的数据列表，失败或无效时返回空列表
+    """
+    # 提取 JSON
+    try:
+        json_match = re.search(r"\{[\s\S]*\}", text)
+        if not json_match:
+            return []
+        data = json.loads(json_match.group())
+    except (json.JSONDecodeError, AttributeError):
+        return []
+
+    # 获取输出键
+    output_key = config.get("output_key")
+    if not output_key:
+        return []
+
+    # 获取数据列表
+    items = data.get(output_key, [])
+    if not isinstance(items, list):
+        return []
+
+    # 过滤空项
+    valid_items = [item for item in items if item and isinstance(item, dict)]
+
+    # 应用 validator（如果存在）
+    validator = config.get("validator")
+    if validator:
+        validated_items = []
+        for item in valid_items:
+            try:
+                validated = validator(item)
+                if validated:
+                    validated_items.append(validated)
+            except Exception:
+                continue
+        valid_items = validated_items
+
+    return valid_items
+
+
 class BaseWorker:
     """Worker 基类 - 纯粹流水线模式"""
 

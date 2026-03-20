@@ -1,147 +1,33 @@
- MCPToolsManager 类完整解析
-这个类约 125 行，分为 5 个部分：
----
-第 1 部分：单例模式（第 130-149 行）
-_instance: Optional['MCPToolsManager'] = None   # 类变量，存唯一实例
-_initialized: bool = False                      # 类变量，标记是否初始化过
-def __new__(cls) -> 'MCPToolsManager':
-    """创建单例实例"""
-    if cls._instance is None:
-        cls._instance = super().__new__(cls)   # 第一次创建
-    return cls._instance                        # 后续都返回同一个
-def __init__(self):
-    """初始化实例属性"""
-    if MCPToolsManager._initialized:            # 防止重复初始化
-        return
-    
-    self._session: Optional[ClientSession] = None      # MCP 会话
-    self._tools: List[BaseTool] = []                   # 工具列表
-    self._tools_dict: Dict[str, BaseTool] = {}         # 工具字典（按名称索引）
-    self._server_params: Optional[StdioServerParameters] = None
-    self._client_context = None
-    self._session_context = None
-    MCPToolsManager._initialized = True
-作用：保证整个项目只会有一个 MCP 管理器实例，所有 Agent 共享。
----
-第 2 部分：初始化 MCP 服务器（第 151-206 行）
-async def initialize(self) -> None:
-    """初始化 MCP 服务器连接"""
-    
-    # 第 1 步：检查 API Key
-    settings = get_settings()
-    if not settings.amap_api_key:
-        raise ValueError("未配置高德地图 API Key")
-    
-    # 第 2 步：定义 MCP 服务器参数
-    self._server_params = StdioServerParameters(
-        command="npx",                                    # 用 npx 运行
-        args=["-y", "@amap/amap-maps-mcp-server"],       # 下载并运行这个包
-        env={
-            "AMAP_MAPS_API_KEY": settings.amap_api_key,  # 传给 MCP 服务器
-            **dict(os.environ)                            # 保留其他环境变量
-        }
-    )
-    
-    # 第 3 步：启动 MCP 服务器进程
-    # stdio_client 启动一个子进程，通过 stdin/stdout 通信
-    self._client_context = stdio_client(self._server_params)
-    self._read, self._write = await self._client_context.__aenter__()
-    
-    # 第 4 步：建立 MCP 会话
-    self._session_context = ClientSession(self._read, self._write)
-    self._session = await self._session_context.__aenter__()
-    
-    # 第 5 步：握手协议
-    await self._session.initialize()  # 确认协议版本
-    
-    # 第 6 步：获取工具列表
-    raw_tools = await load_mcp_tools(self._session)
-    
-    # 第 7 步：包装工具（添加 schema）
-    self._tools = wrap_mcp_tools(raw_tools)
-    self._tools_dict = {tool.name: tool for tool in self._tools}
-流程图：
-npx @amap/amap-maps-mcp-server
-         │
-         │ 子进程启动
-         ▼
-  Python stdio_client()
-         │
-         │ stdin/stdout 通信
-         ▼
-  ClientSession.initialize()
-         │
-         │ 握手
-         ▼
-  load_mcp_tools() → 获取16个工具
-         │
-         │ 包装
-         ▼
-  返回给 Workers
----
-第 3 部分：清理资源（第 208-229 行）
-async def cleanup(self) -> None:
-    """清理 MCP 服务器资源"""
-    
-    if self._session_context:
-        await self._session_context.__aexit__(None, None, None)
-    
-    if self._client_context:
-        await self._client_context.__aexit__(None, None, None)
-    
-    # 清空所有属性
-    self._session = None
-    self._client_context = None
-    self._session_context = None
-    self._tools = []
-    self._tools_dict = {}
-作用：应用关闭时正确退出 MCP 子进程，避免僵尸进程。
----
-第 4 部分：工具获取方法（第 231-246 行）
-def get_tools(self) -> List[BaseTool]:
-    """获取所有可用工具"""
-    return self._tools
-def get_tools_by_names(self, names: List[str]) -> List[BaseTool]:
-    """根据名称获取指定工具"""
-    # 例：get_tools_by_names(["maps_weather", "maps_text_search"])
-    return [self._tools_dict[name] for name in names if name in self._tools_dict]
-def list_available_tools(self) -> List[str]:
-    """列出所有可用工具名称"""
-    return list(self._tools_dict.keys())
-@property
-def is_initialized(self) -> bool:
-    """检查是否已初始化"""
-    return self._session is not None
-调用场景：
-- workers.py:218：tools = get_mcp_manager().get_tools_by_names(config["tools"])
----
-第 5 部分：RateLimitedMCPToolsManager 继承（扩展）
-class RateLimitedMCPToolsManager(MCPToolsManager):
-    """带并发控制的 MCP 工具管理器"""
-    
-    def __init__(self):
-        super().__init__()
-        self._semaphore: Optional[asyncio.Semaphore] = None
-        self._max_concurrent = 1  # 最多1个并发
-    
-    async def initialize(self):
-        await super().initialize()  # 先调用父类的初始化
-        
-        # 拦截 call_tool，添加限流
-        self._original_call_tool = self._session.call_tool
-        self._semaphore = asyncio.Semaphore(1)
-        
-        # 用 safe_call_tool 替换原始方法
-        self._session.call_tool = safe_call_tool
-关键点：通过替换 _session.call_tool 方法，实现拦截，这是装饰器模式在运行时的应用。
----
-总结
-功能	实现方式
-单例	__new__ 类方法
-启动 MCP 进程	StdioServerParameters + stdio_client
-获取工具	load_mcp_tools()
-包装工具	wrap_mcp_tools()
-并发控制	拦截 call_tool + Semaphore
-资源清理	上下文管理器的 __aexit__
----
-这个类把 MCP 工具管理的所有逻辑都封装在一起了，Workers 只需要调用 get_mcp_manager().get_tools_by_names() 就行。
+1. 并发写入 + 重试会造成数据重复（这个依然成立）
+pythonattractions: Annotated[list, operator.add]
+operator.add 是追加语义。如果 attraction_agent 因网络抖动触发了重试，第二次结果会直接追加到第一次后面，Planner 会拿到重复的景点数据。建议加一个按名称去重的 merge 函数替换 operator.add：
+pythondef merge_unique_by_name(a: list, b: list) -> list:
+    seen = {item.get("name") for item in a if isinstance(item, dict)}
+    return a + [item for item in b if item.get("name") not in seen]
+
+2. parse_agent_output 的正则解析是整个系统最脆弱的点
+pythondef parse_agent_output(text: str) -> dict:
+    json_match = re.search(r"\{[\s\S]*\}", text)
+Supervisor 和 Planner 都已经用了 with_structured_output，但 4 个 Worker 的输出还在靠正则兜底。LLM 在描述性文字里夹带示例 JSON 时，这个正则会抓到错误的位置。既然 agent_output.py 里 AttractionData、WeatherData 这些 Pydantic 模型都已经写好了，Worker 也应该走 with_structured_output，让模型输出直接被校验，而不是解析字符串。
+
+3. 测试文件引用了不存在的函数，测试套件无法运行
+python# test_agent_output.py 第113行
+from app.agents.workers import parse_and_validate
+workers.py 里没有 parse_and_validate，跑 pytest 直接 ImportError，整个测试文件全挂。这个 schema 里 AGENT_REGISTRY 也被测试引用，但测试里的 "search"/"attraction" key 和实际注册表的 key 对不上。
+
+4. bocha_search_service.py 是死代码
+整个文件包括缓存层逻辑写得相当完整，但没有任何地方 import 或调用它。如果未来要用建议明确标注 TODO，否则直接删掉，避免维护者困惑。
+
+5. Result.vue 里导出逻辑的重复是实质性技术债
+exportAsImage 和 exportAsPDF 共享了约 120 行完全相同的 DOM 处理代码。这两个函数唯一的差别在最后：一个调 canvas.toDataURL，一个调 jsPDF。应该抽成：
+typescriptconst prepareExportCanvas = async (): Promise<HTMLCanvasElement> => { ... }
+
+const exportAsImage = async () => {
+  const canvas = await prepareExportCanvas()
+  // 下载图片
+}
+
+const exportAsPDF = async () => {
+  const canvas = await prepareExportCanvas()
+  // 生成PDF
+}
