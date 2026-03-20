@@ -5,7 +5,7 @@ import logging
 from typing import Union, Optional, Dict, Any
 from pydantic import ValidationError
 
-from ...models.schemas import TripRequest, TripPlan, Budget
+from ...models.schemas import TripRequest, TripPlan
 
 logger = logging.getLogger(__name__)
 
@@ -73,84 +73,17 @@ def parse_json_to_dict(json_data: Union[dict, str]) -> Optional[Dict[str, Any]]:
         return None
 
 
-def calculate_budget(data: Dict[str, Any]) -> Dict[str, int]:
-    """
-    计算旅行预算
-
-    Args:
-        data: 包含 days 数组的旅行数据
-
-    Returns:
-        预算字典
-    """
-    total_attr = 0
-    total_meal = 0
-    total_hotel = 0
-    total_transport = 0
-
-    logger.debug(f"开始计算预算... days 数量: {len(data.get('days', []))}")
-
-    for day in data.get("days", []):
-        # 累加景点门票
-        for attr in day.get("attractions", []):
-            price = attr.get("ticket_price", 0)
-            logger.debug(f"景点: {attr.get('name', '未知')}, 门票价格: {price}")
-            if isinstance(price, (int, float)) and price >= 0:
-                total_attr += price
-
-        # 累加餐饮费用
-        for meal in day.get("meals", []):
-            cost = meal.get("estimated_cost", 0)
-            logger.debug(f"餐饮: {meal.get('name', '未知')}, 费用: {cost}")
-            if isinstance(cost, (int, float)) and cost >= 0:
-                total_meal += cost
-
-    # 累加酒店费用
-    for hotel in data.get("hotels", []):
-        price = hotel.get("price", 0) or hotel.get("estimated_cost", 0)
-        if isinstance(price, (int, float)) and price >= 0:
-            total_hotel += price
-            logger.debug(f"酒店: {hotel.get('name', '未知')}, 价格: {price}")
-
-    # 累加交通费用
-    for route in data.get("routes", []):
-        cost = route.get("distance_cost", 0) or route.get("estimated_cost", 0)
-        if isinstance(cost, (int, float)) and cost >= 0:
-            total_transport += cost
-            logger.debug(f"路线: {route.get('name', '未知')}, 费用: {cost}")
-
-    logger.debug(
-        f"景点总费用: {total_attr}, 餐饮总费用: {total_meal}, 酒店总费用: {total_hotel}, 交通总费用: {total_transport}"
-    )
-
-    # 构建预算字典
-    budget = {
-        "total_attractions": int(total_attr),
-        "total_hotels": int(total_hotel),
-        "total_meals": int(total_meal),
-        "total_transportation": int(total_transport),
-        "total": int(total_attr + total_meal + total_hotel + total_transport + 100),
-    }
-
-    logger.debug(f"最终预算: {budget}")
-    return budget
-
-
 def build_trip_plan(data: Dict[str, Any], request: TripRequest) -> TripPlan:
     """
-    构建 TripPlan 对象
+    构建 TripPlan 对象（LLM已生成预算，无需额外计算）
 
     Args:
-        data: 解析后的旅行数据字典
+        data: 解析后的旅行数据字典（包含LLM生成的预算）
         request: 原始请求对象
 
     Returns:
         TripPlan 对象
     """
-    # 计算预算
-    budget_data = calculate_budget(data)
-
-    # 处理 overall_suggestions
     overall_suggestions = data.get("overall_suggestions", "")
     if isinstance(overall_suggestions, list):
         overall_suggestions = " ".join(overall_suggestions)
@@ -163,7 +96,7 @@ def build_trip_plan(data: Dict[str, Any], request: TripRequest) -> TripPlan:
             days=data.get("days", []),
             weather_info=data.get("weather_info", []),
             overall_suggestions=overall_suggestions or "祝您旅途愉快！",
-            budget=budget_data,
+            budget=data.get("budget"),
         )
         logger.info("TripPlan 创建成功")
         return plan
@@ -173,13 +106,10 @@ def build_trip_plan(data: Dict[str, Any], request: TripRequest) -> TripPlan:
         for error in e.errors():
             logger.error(f"  - 路径: {error['loc']} | 原因: {error['msg']}")
 
-        # 返回安全版本
-        return _create_safe_plan(data, request, budget_data)
+        return _create_safe_plan(data, request)
 
 
-def _create_safe_plan(
-    data: Dict[str, Any], request: TripRequest, budget_data: Dict[str, int]
-) -> TripPlan:
+def _create_safe_plan(data: Dict[str, Any], request: TripRequest) -> TripPlan:
     """
     创建安全的 TripPlan（验证失败时的兜底方案）
     """
@@ -190,7 +120,7 @@ def _create_safe_plan(
         "days": [],
         "weather_info": [],
         "overall_suggestions": "数据验证失败，但规划完成",
-        "budget": budget_data,
+        "budget": data.get("budget"),
     }
     logger.warning(f"使用安全版本: {safe_data}")
     return TripPlan(**safe_data)
@@ -213,7 +143,7 @@ def create_default_plan(request: TripRequest) -> TripPlan:
         end_date=request.end_date,
         days=[],
         overall_suggestions="无法生成详细计划",
-        budget=Budget(),
+        budget=None,
     )
 
 

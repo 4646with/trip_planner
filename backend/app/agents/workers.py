@@ -164,6 +164,7 @@ class BaseWorker:
             "city": city_input,
             "transportation": state.get("transportation", "未知"),
             "accommodation": state.get("accommodation", "未知"),
+            "preferences": ", ".join(state.get("preferences", [])) or "无",
             "free_text_input": state.get("free_text_input", "无"),
             "start_date": state.get("start_date", "未知"),
             "end_date": state.get("end_date", "未知"),
@@ -269,8 +270,16 @@ class Planner:
             f"Planner 收到的结构化数据: attractions={bool(attractions)}, weather={bool(weather_info)}, hotels={bool(hotels)}, routes={bool(routes)}"
         )
 
+        accommodation = state.get("accommodation", "未知")
+        preferences = state.get("preferences", [])
+        preferences_str = ", ".join(preferences) if preferences else "无"
+
+        planner_prompt = AgentPrompts.PLANNER.format(
+            accommodation=accommodation, preferences=preferences_str
+        )
+
         planner_messages = [
-            SystemMessage(content=AgentPrompts.PLANNER),
+            SystemMessage(content=planner_prompt),
             HumanMessage(
                 content=f"""
 请根据以下结构化数据生成旅行计划。
@@ -278,6 +287,8 @@ class Planner:
 目标城市: {state.get("city", "未知")}
 旅行日期: {state.get("start_date", "未知")} 至 {state.get("end_date", "未知")}
 旅行天数: {state.get("travel_days", 0)}天
+住宿偏好: {accommodation}
+旅行偏好: {preferences_str}
 
 【结构化数据】:
 景点数据: {json.dumps(attractions, ensure_ascii=False)[:500]}

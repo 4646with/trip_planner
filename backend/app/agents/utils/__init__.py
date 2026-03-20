@@ -3,7 +3,6 @@
 from .parsers import (
     extract_json_from_text,
     parse_json_to_dict,
-    calculate_budget,
     build_trip_plan,
     create_default_plan,
     parse_and_build_plan,
@@ -12,7 +11,6 @@ from .parsers import (
 __all__ = [
     "extract_json_from_text",
     "parse_json_to_dict",
-    "calculate_budget",
     "build_trip_plan",
     "create_default_plan",
     "parse_and_build_plan",

@@ -5,6 +5,12 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HelloAgents智能旅行助手</title>
+    <!-- 高德地图安全密钥配置 - 必须在SDK加载前设置 -->
+    <script type="text/javascript">
+      window._AMapSecurityConfig = {
+        securityJsCode: '你申请的安全密钥', // 替换为你的安全密钥
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

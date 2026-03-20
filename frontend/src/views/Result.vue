@@ -835,6 +835,9 @@ const restoreMap = () => {
         const AMap = await AMapLoader.load({
           key: import.meta.env.VITE_AMAP_WEB_JS_KEY,  // 高德地图Web端(JS API) Key
           version: '2.0',
+          securityConfig: {
+            securityJsCode: import.meta.env.VITE_AMAP_SECURITY_JS_CODE  // 高德JS API安全密钥
+          },
           plugins: ['AMap.Marker', 'AMap.Polyline', 'AMap.InfoWindow']
         })
 
@@ -963,7 +966,7 @@ const drawRoutes = (AMap: any, attractions: any[]) => {
       strokeWeight: 4,
       strokeOpacity: 0.8,
       strokeStyle: 'solid',
-      showDir: true // 显示方向箭头
+      showDir: true
     })
 
     map.add(polyline)

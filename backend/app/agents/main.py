@@ -64,7 +64,7 @@ class MapAgentsSystem:
         self._planner = Planner(self._llm)
 
         logger.info("正在构建 StateGraph...")
-        
+
         # ✅ 动态获取所有 Worker 节点（使用 name 作为节点名）
         registry = get_agent_registry()
         worker_nodes = {}
