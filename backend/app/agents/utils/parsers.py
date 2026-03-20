@@ -180,3 +180,22 @@ def parse_and_build_plan(json_data: Union[dict, str], request: TripRequest) -> T
 
     # 构建 TripPlan
     return build_trip_plan(data, request)
+
+
+async def parse_and_build_plan_async(
+    json_data: Union[dict, str], request: TripRequest
+) -> TripPlan:
+    """
+    异步版本的一站式解析和构建 TripPlan
+
+    实际逻辑与同步版本相同，提供异步接口以兼容异步调用链
+
+    Args:
+        json_data: JSON 数据（字典或字符串）
+        request: 原始请求对象
+
+    Returns:
+        TripPlan 对象
+    """
+    # 直接调用同步版本（解析操作不涉及 IO，无需真正的异步）
+    return parse_and_build_plan(json_data, request)
