@@ -109,7 +109,13 @@ def parse_agent_output(text: str) -> dict:
     try:
         json_match = re.search(r"\{[\s\S]*\}", text)
         if json_match:
-            return json.loads(json_match.group())
+            data = json.loads(json_match.group())
+            # 确保所有值都是列表类型（LangGraph 的 Annotated[list, operator.add] 要求）
+            for key in ["attractions", "weather_info", "hotels", "routes"]:
+                if key in data and not isinstance(data[key], list):
+                    # 如果是单个对象，包装成列表
+                    data[key] = [data[key]] if data[key] else []
+            return data
     except json.JSONDecodeError:
         pass
 
