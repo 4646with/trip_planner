@@ -225,10 +225,27 @@ class MCPToolsManager:
         return self._tools
 
     def get_tools_by_names(self, names: List[str]) -> List[BaseTool]:
-        missing = [n for n in names if n not in self._tools_dict]
+        # 支持混合类型：字符串工具名称 或 实际工具对象
+        result = []
+        missing = []
+
+        for name in names:
+            if isinstance(name, str):
+                # 字符串工具名称
+                if name in self._tools_dict:
+                    result.append(self._tools_dict[name])
+                else:
+                    missing.append(name)
+            elif isinstance(name, BaseTool):
+                # 已经是工具对象，直接使用
+                result.append(name)
+            else:
+                missing.append(str(name))
+
         if missing:
             logger.warning(f"[MCP] 以下工具未找到: {missing}")
-        return [self._tools_dict[n] for n in names if n in self._tools_dict]
+
+        return result
 
     def list_available_tools(self) -> List[str]:
         return list(self._tools_dict.keys())
