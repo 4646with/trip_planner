@@ -80,7 +80,7 @@ def with_retry_and_log(func):
             traceback.print_exc()
             return {
                 "messages": state.get("messages", []),
-                self.output_key: {"success": False, "data": {}, "error": str(e)},
+                self.output_key: [],  # 必须是列表类型
                 "agent_results": self._update_agent_results(state, success=False),
             }
 
