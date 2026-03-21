@@ -57,13 +57,19 @@ class AgentPrompts:
 2. 调用 maps_search_detail 获取详细POI信息
 3. 【可选增强】获取到景点后，使用 web_search 工具搜索详细攻略
 
-【web_search 使用指南】
-当获取到景点名称后，可以使用 web_search 工具获取游览攻略。
-搜索格式固定为："{{景点名}} 游览攻略 必去理由 2024"
-只替换引号内的景点名称变量，不要改变其他词。
+【web_search 使用指南 - 体感型查询】
+当获取到景点名称后，使用 web_search 工具获取真实体验信息。
+必须包含以下多维后缀：
+- "真实体验" - 获取游客第一手感受
+- "避坑" 或 "防踩雷" - 避免常见问题
+- "拍照点位" - 推荐打卡拍照位置
+- "游玩时长" - 建议游览时间
+
+搜索格式："{{景点名}} 真实体验 避坑 拍照点位 游玩时长"
+只替换景点名变量，不要改变其他词。
 例如：
-- 正确："故宫博物院 游览攻略 必去理由 2024"
-- 错误："故宫门票预订"、"故宫附近酒店"
+- 正确："故宫博物院 真实体验 避坑 拍照点位 游玩时长"
+- 错误："故宫攻略"、"故宫门票预订"、"故宫附近酒店"
 
 输出格式（必须返回纯JSON，不要有其他文字）：
 {{
@@ -115,23 +121,36 @@ class AgentPrompts:
 住宿偏好：{accommodation}
 旅行偏好：{preferences}
 
+【重要】地理信息透传策略：
+1. 优先使用 attractions 中已获取的景点坐标（longitude, latitude）作为搜索中心
+2. 调用 maps_text_search 时：
+   - keywords: 酒店类型关键词（如"五星级酒店"、"快捷酒店"、"民宿"）
+   - location: 景点坐标（格式："经度,纬度"），如 "116.397428,39.90923"
+   - radius: 5000（米），在景点周边5公里范围内搜索酒店
+3. 优先推荐靠近主要景点的酒店，减少交通时间
+
 【重要】搜索策略：
 1. 根据用户的住宿偏好选择合适档次的酒店：
    - 如果用户选择"豪华型酒店"，重点搜索五星级酒店、高端度假村、精品酒店
    - 如果用户选择"经济型酒店"，重点搜索快捷酒店、连锁酒店、青旅
    - 如果用户选择"民宿"，重点搜索民宿、客栈、公寓
 2. 结合旅行偏好（如"美食"、"休闲"等）选择地理位置便利的酒店
-3. 调用 maps_text_search 工具搜索酒店，关键词要体现住宿偏好
-4. 将结果解析为结构化数据
-5. 【可选增强】对于餐厅类POI，使用 web_search 工具搜索招牌菜和人均消费
+3. 将结果解析为结构化数据
+4. 【可选增强】对于餐厅类POI，使用 web_search 工具搜索招牌菜和真实评价
 
-【web_search 使用指南】
-当获取到餐厅名称后，可以使用 web_search 工具获取详细信息。
-搜索格式固定为："{{餐厅名}} {{城市}} 招牌菜 人均"
-只替换引号内的餐厅名和城市变量，不要改变其他词。
+【web_search 使用指南 - 体感型查询】
+当获取到餐厅名称后，使用 web_search 工具获取真实评价信息。
+必须包含以下多维后缀：
+- "必吃榜" 或 "必点招牌菜" - 推荐特色菜品
+- "真实评价" - 获取顾客真实反馈
+- "排队情况" - 了解等候时间
+- "适合拍照吗" - 餐厅环境氛围
+
+搜索格式："{{餐厅名}} {{城市}} 必吃榜 真实评价 排队情况 适合拍照吗"
+只替换餐厅名和城市变量，不要改变其他词。
 例如：
-- 正确："全聚德 北京 招牌菜 人均"
-- 错误："全聚德预订"、"全聚德地址"
+- 正确："全聚德 北京 必吃榜 真实评价 排队情况 适合拍照吗"
+- 错误："全聚德预订"、"全聚德地址"、"全聚德招牌菜"
 
 输出格式（必须返回纯JSON，不要有其他文字）：
 {{
@@ -153,17 +172,25 @@ class AgentPrompts:
 目的地：{city}
 交通方式：{transportation}
 
+【重要】起点和终点规则：
+1. 起点(origin)：必须使用 attractions 中已获取的景点地址作为起点
+   - 如果有多个景点，使用第一个景点的地址作为起点
+   - 如果 attractions 为空，起点使用目的地城市的地标（如"深圳市中心"）
+2. 终点(destination)：使用后续要去的景点地址
+3. 只规划景点之间的路线，不要自行脑补不存在的起点（如其他城市）
+
 任务：
-1. 根据交通方式选择合适的路线规划工具
-2. 调用 maps_direction_walking 或 maps_direction_driving 等工具
-3. 将结果解析为结构化数据
+1. 从 attractions 中获取景点地址作为起点和终点
+2. 根据交通方式选择合适的路线规划工具
+3. 调用 maps_direction_walking 或 maps_direction_driving 等工具
+4. 将结果解析为结构化数据
 
 输出格式（必须返回纯JSON，不要有其他文字）：
 {{
   "routes": [
     {{
-      "origin": "起点名称",
-      "destination": "终点名称",
+      "origin": "景点1地址",
+      "destination": "景点2地址",
       "transportation": "步行/驾车/公交",
       "duration": 30,
       "distance": "2公里",
@@ -192,39 +219,39 @@ class AgentPrompts:
 3. 短途优先：如果用户行程只有1-2天，所有景点和餐厅应集中在同一区域
 
 必须严格按照以下 JSON 结构输出，且不要包含任何 markdown 标记：
-{
+{{
   "city": "北京",
   "start_date": "2025-06-01",
   "end_date": "2025-06-03",
   "days": [
-    {
+    {{
       "date": "YYYY-MM-DD",
       "day_index": 0,
       "description": "当日行程简述",
       "transportation": "地铁/打车",
       "accommodation": "某某酒店",
       "attractions": [
-        {
+        {{
           "name": "景点名称",
           "address": "景点地址",
-          "location": {"longitude": 113.xxx, "latitude": 22.xxx},
+          "location": {{"longitude": 116.4, "latitude": 39.9}},
           "visit_duration": 120,
           "description": "景点看点描述",
           "category": "景点",
           "ticket_price": 60
-        }
+        }}
       ],
       "meals": [
-        {
+        {{
           "type": "lunch",
           "name": "餐厅名称",
           "estimated_cost": 50
-        }
+        }}
       ]
-    }
+    }}
   ],
   "weather_info": [
-    {
+    {{
       "date": "2025-06-01",
       "day_weather": "多云",
       "night_weather": "晴",
@@ -232,17 +259,17 @@ class AgentPrompts:
       "night_temp": 24,
       "wind_direction": "东南风",
       "wind_power": "3级"
-    }
+    }}
   ],
   "overall_suggestions": "请根据以上行程提供详细的总体旅行建议...",
-  "budget": {
+  "budget": {{
       "total_attractions": 0,
       "total_hotels": 0,
       "total_meals": 0,
       "total_transportation": 0,
       "total": 0
-  }
-}
+  }}
+}}
 
 【重要】请根据以下规则计算预算字段：
 1. total_attractions: 累加所有景点的 ticket_price

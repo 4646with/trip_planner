@@ -4,28 +4,61 @@ from pydantic import SecretStr
 
 import os
 
+# 设置代理（如果配置了）
+_http_proxy = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
+_https_proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+if _https_proxy:
+    os.environ["HTTPS_PROXY"] = _https_proxy
+    print(f"[LLM] 使用代理: {_https_proxy}")
+
+
 def get_llm():
     """
     获取大语言模型实例
-    使用 langchain_openai 原生接入智谱AI，完美支持 LangGraph
+
+    支持的模型类型：
+    1. Gemini (推荐)：设置 LLM_PROVIDER=gemini
+       - API Key: GEMINI_API_KEY
+       - Base URL: https://generativelanguage.googleapis.com/v1beta/openai/
+       - Model: gemini-2.0-flash (默认)
+
+    2. 智谱AI (默认)：设置 LLM_PROVIDER=zhipu 或不设置
+       - API Key: LLM_API_KEY 或 OPENAI_API_KEY
+       - Base URL: https://open.bigmodel.cn/api/paas/v4 (默认)
+       - Model: glm-4-flash (默认)
     """
     settings = get_settings()
-    
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-    
-    if not api_key:
-        raise ValueError("未找到大模型 API Key，请检查 .env 配置文件！")
-    
-    base_url = os.getenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
-    model = os.getenv("LLM_MODEL_ID", "glm-4-flash")
-    
+
+    provider = os.getenv("LLM_PROVIDER", "zhipu").lower()
+
+    if provider == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "未找到 GEMINI_API_KEY 或 LLM_API_KEY，请检查 .env 配置文件！"
+            )
+        base_url = os.getenv(
+            "LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"
+        )
+        model = os.getenv("GEMINI_MODEL") or os.getenv(
+            "LLM_MODEL_ID", "gemini-2.0-flash"
+        )
+        print(f"[LLM] 使用 Gemini: {model}")
+    else:
+        api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("未找到 LLM_API_KEY，请检查 .env 配置文件！")
+        base_url = os.getenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+        model = os.getenv("LLM_MODEL_ID", "glm-4-flash")
+        print(f"[LLM] 使用智谱AI: {model}")
+
     llm = ChatOpenAI(
         api_key=SecretStr(api_key),
         base_url=base_url,
         model=model,
         temperature=0.7,
         max_retries=3,
-        timeout=120
+        timeout=120,
     )
-    
+
     return llm

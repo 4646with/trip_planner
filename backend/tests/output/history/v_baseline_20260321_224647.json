@@ -1,0 +1,138 @@
+{
+  "result": {
+    "city": "深圳",
+    "start_date": "2026-03-23",
+    "end_date": "2026-03-24",
+    "days": [
+      {
+        "date": "2026-03-23",
+        "day_index": 1,
+        "description": "尊享深圳湾顶级会所与米其林私厨，入住奢华公寓",
+        "transportation": "打车/自驾",
+        "accommodation": "深圳湾一号·莱佛士公寓",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "深圳湾一号·云颂",
+            "address": "南山区科苑南路与东滨路交汇处",
+            "location": {
+              "longitude": 113.92531,
+              "latitude": 22.48316
+            },
+            "visit_duration": 180,
+            "description": "顶级私人会所，直升机停机坪、无边际泳池、米其林餐厅、私人游艇码头，会员制奢华体验",
+            "category": "私人会所",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "lunch",
+            "name": "云颂·米其林星级餐厅",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 1200
+          },
+          {
+            "type": "dinner",
+            "name": "莱佛士公寓·私人主厨晚宴",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 2500
+          }
+        ]
+      },
+      {
+        "date": "2026-03-24",
+        "day_index": 2,
+        "description": "总统套房深度体验+太子湾游艇出海，午后返程",
+        "transportation": "打车/自驾",
+        "accommodation": "",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "华侨城洲际酒店·总统套房",
+            "address": "南山区深南大道9009号",
+            "location": {
+              "longitude": 113.9954,
+              "latitude": 22.5412
+            },
+            "visit_duration": 240,
+            "description": "680㎡总统套房，私人管家、劳斯莱斯接送、直升机观光、米其林星级私厨晚宴",
+            "category": "奢华酒店",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          },
+          {
+            "name": "招商局明华国际·私人游艇会",
+            "address": "南山区海运路1号太子湾",
+            "location": {
+              "longitude": 113.911,
+              "latitude": 22.473
+            },
+            "visit_duration": 120,
+            "description": "会员制游艇码头，可租45尺Sunseeker出海，配船长+香槟下午茶",
+            "category": "游艇会",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "lunch",
+            "name": "洲际酒店·米其林星级私厨",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 1500
+          }
+        ]
+      }
+    ],
+    "weather_info": [
+      {
+        "date": "2026-03-23",
+        "day_weather": "晴",
+        "night_weather": "晴",
+        "day_temp": 27,
+        "night_temp": 22,
+        "wind_direction": "东南风",
+        "wind_power": "2级"
+      },
+      {
+        "date": "2026-03-24",
+        "day_weather": "多云",
+        "night_weather": "晴",
+        "day_temp": 28,
+        "night_temp": 23,
+        "wind_direction": "东风",
+        "wind_power": "2级"
+      }
+    ],
+    "overall_suggestions": "全程尊享会员制场所，务必提前3天预约云颂会所、总统套房及游艇出海；建议携带护照/会员邀请码。着装：男士商务休闲+正装，女士优雅礼服，游艇需防滑白底鞋。交通：酒店可安排劳斯莱斯/奔驰S接送，单程约600元。防晒：深圳3月紫外线强，出海请备SPF50+防晒霜。备用：若遇海上管制，游艇可改为洲际高空直升机观光（15分钟，需额外付费）。",
+    "budget": {
+      "total_attractions": 0,
+      "total_hotels": 16900,
+      "total_meals": 5200,
+      "total_transportation": 200,
+      "total": 24510
+    }
+  },
+  "log_capture": {
+    "web_search_queries": [],
+    "text_search_params": [],
+    "route_origins": []
+  }
+}

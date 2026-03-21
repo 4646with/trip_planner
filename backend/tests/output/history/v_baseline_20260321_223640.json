@@ -1,0 +1,138 @@
+{
+  "result": {
+    "city": "深圳",
+    "start_date": "2026-03-23",
+    "end_date": "2026-03-24",
+    "days": [
+      {
+        "date": "2026-03-23",
+        "day_index": 1,
+        "description": "南山区云端地标+滨海美食休闲日",
+        "transportation": "打车",
+        "accommodation": "深圳湾安达仕酒店",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "深圳湾一号·云境",
+            "address": "南山区科苑南路与东滨路交汇处",
+            "location": {
+              "longitude": 113.936,
+              "latitude": 22.483
+            },
+            "visit_duration": 180,
+            "description": "深圳地标级顶奢综合体，云端会所+一线无遮挡海景+直升机停机坪，私享湾区天际线",
+            "category": "景点",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          },
+          {
+            "name": "华侨城·欢乐海岸PLUS·蓝楹湾",
+            "address": "南山区白石路东8号欢乐海岸",
+            "location": {
+              "longitude": 113.962,
+              "latitude": 22.485
+            },
+            "visit_duration": 240,
+            "description": "城市滨海商业旗舰，游艇码头+水秀剧场+米其林餐厅集群，夜晚灯光水幕极致浪漫",
+            "category": "景点",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "lunch",
+            "name": "Ensue(南山米其林加州融合菜)",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 980
+          },
+          {
+            "type": "dinner",
+            "name": "欢乐海岸·BLUEMARLIN蓝楹湾海鲜牛排馆",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 1200
+          }
+        ]
+      },
+      {
+        "date": "2026-03-24",
+        "day_index": 2,
+        "description": "罗湖云端早茶+轻松返程",
+        "transportation": "打车",
+        "accommodation": "深圳瑞吉酒店(京基100)",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "深圳瑞吉酒店·云端大堂",
+            "address": "罗湖区深南东路5016号京基100大厦96-100层",
+            "location": {
+              "longitude": 114.108,
+              "latitude": 22.544
+            },
+            "visit_duration": 90,
+            "description": "京基100顶层96-100楼高空大堂，俯瞰深港双城天际线，享云端精致下午茶",
+            "category": "景点",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "brunch",
+            "name": "瑞吉酒店·秀餐厅(Social)高空自助早茶",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 450
+          }
+        ]
+      }
+    ],
+    "weather_info": [
+      {
+        "date": "2026-03-23",
+        "day_weather": "多云",
+        "night_weather": "晴",
+        "day_temp": 29,
+        "night_temp": 24,
+        "wind_direction": "东南风",
+        "wind_power": "3级"
+      },
+      {
+        "date": "2026-03-24",
+        "day_weather": "晴",
+        "night_weather": "多云",
+        "day_temp": 30,
+        "night_temp": 25,
+        "wind_direction": "南风",
+        "wind_power": "2级"
+      }
+    ],
+    "overall_suggestions": "1.两日均在南山-罗湖一线，打车最省时，早高峰预留20分钟弹性。2.欢乐海岸水秀20:00开始，提前占湖景餐位；3.京基100顶层17:30后光线最佳，可拍落日+夜景。4.安达仕与瑞吉均含泳池/SPA，休闲时间可自由安排。5.气温25-30℃，轻短袖+薄外套足够，带防晒。",
+    "budget": {
+      "total_attractions": 0,
+      "total_hotels": 7000,
+      "total_meals": 2630,
+      "total_transportation": 200,
+      "total": 10803
+    }
+  },
+  "log_capture": {
+    "web_search_queries": [],
+    "text_search_params": [],
+    "route_origins": []
+  }
+}

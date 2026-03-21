@@ -14,16 +14,51 @@ from functools import wraps
 from typing import Dict, List, Any
 
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.prebuilt import create_react_agent
 
 from .schemas.state import AgentState
 from .prompts.agents import AgentPrompts
 from ..services.mcp_tools import get_mcp_manager, AmapTools
-from .tools import web_search
+from .tools import web_search as original_web_search
 from ..models.schemas import TripPlan
 
 logger = logging.getLogger(__name__)
+
+
+# ==========================================
+# web_search 体感型包装器 - 自动补全后缀
+# ==========================================
+_WEB_SEARCH_SUFFIXES = {
+    "attraction": " 真实体验 避坑 拍照点位 游玩时长",
+    "hotel": " 必吃榜 真实评价 排队情况 适合拍照吗",
+}
+
+
+def create_enhanced_web_search(agent_type: str) -> StructuredTool:
+    """创建增强版 web_search 工具，自动补全体感类后缀"""
+    suffix = _WEB_SEARCH_SUFFIXES.get(agent_type, "")
+
+    async def enhanced_web_search(query: str) -> str:
+        enhanced_query = query + suffix
+        logger.info(f"[{agent_type}] web_search 增强: '{query}' -> '{enhanced_query}'")
+        return await original_web_search.ainvoke({"query": enhanced_query})
+
+    from pydantic import BaseModel
+
+    enhanced_schema = type(
+        "EnhancedWebSearchInput",
+        (BaseModel,),
+        {"query": (str, ...), "__annotations__": {"query": str}},
+    )
+
+    return StructuredTool(
+        name="web_search",
+        description=original_web_search.description,
+        func=None,
+        coroutine=enhanced_web_search,
+        args_schema=enhanced_schema,
+    )
 
 
 # ==========================================
@@ -33,8 +68,9 @@ AGENT_REGISTRY = {
     "attraction": {
         "name": "attraction_agent",
         "prompt": AgentPrompts.ATTRACTION,
-        "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL, web_search],
+        "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL],
         "output_key": "attractions",
+        "use_enhanced_web_search": True,
     },
     "weather": {
         "name": "weather_agent",
@@ -45,8 +81,9 @@ AGENT_REGISTRY = {
     "hotel": {
         "name": "hotel_agent",
         "prompt": AgentPrompts.HOTEL,
-        "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL, web_search],
+        "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL],
         "output_key": "hotels",
+        "use_enhanced_web_search": True,
     },
     "route": {
         "name": "route_agent",
@@ -273,6 +310,12 @@ class WorkerExecutor:
 
         for agent_id, config in AGENT_REGISTRY.items():
             tools = get_mcp_manager().get_tools_by_names(config["tools"])
+
+            if config.get("use_enhanced_web_search", False):
+                enhanced_search = create_enhanced_web_search(agent_id)
+                tools.append(enhanced_search)
+                logger.info(f"[{agent_id}] 已注入增强版 web_search 工具")
+
             self._workers[agent_id] = BaseWorker(
                 manager=self._manager,
                 name=config["name"],

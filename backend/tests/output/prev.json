@@ -1,0 +1,257 @@
+{
+  "result": {
+    "city": "深圳",
+    "start_date": "2026-03-23",
+    "end_date": "2026-03-24",
+    "days": [
+      {
+        "date": "2026-03-23",
+        "day_index": 1,
+        "description": "云端地标打卡与高空酒吧体验",
+        "transportation": "打车",
+        "accommodation": "深圳鹏瑞莱佛士酒店",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "深圳湾1号·云颂",
+            "address": "南山区科苑南路与东滨路交汇处",
+            "location": {
+              "longitude": 113.93607,
+              "latitude": 22.48324
+            },
+            "visit_duration": 180,
+            "description": "顶级城市地标综合体，含奢华公寓、莱佛士酒店及360°空中观光台，可俯瞰深圳湾与香港天际线，专属管家服务与直升机停机坪体验",
+            "category": "景点",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          },
+          {
+            "name": "鹏瑞莱佛士酒店·长廊酒吧",
+            "address": "南山区深圳湾1号T7栋71层",
+            "location": {
+              "longitude": 113.9358,
+              "latitude": 22.4831
+            },
+            "visit_duration": 120,
+            "description": "全球最高莱佛士酒吧，300米高空云端长廊，香槟王Dom Pérignon专属酒窖，每晚限量鱼子酱与爵士乐现场",
+            "category": "景点",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "lunch",
+            "name": "鹏瑞莱佛士酒店·云璟中餐厅",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 680
+          },
+          {
+            "type": "dinner",
+            "name": "长廊酒吧香槟鱼子酱套餐",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 1200
+          }
+        ]
+      },
+      {
+        "date": "2026-03-24",
+        "day_index": 2,
+        "description": "湖畔慢生活与福田高空下午茶",
+        "transportation": "打车",
+        "accommodation": "深圳鹏瑞莱佛士酒店",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "华侨城·波托菲诺纯水岸",
+            "address": "南山区香山中街波托菲诺",
+            "location": {
+              "longitude": 113.9847,
+              "latitude": 22.5384
+            },
+            "visit_duration": 150,
+            "description": "意大利小镇风情湖区，环湖步道、天鹅船与湖畔咖啡，可体验油画写生与手冲咖啡",
+            "category": "景点",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          },
+          {
+            "name": "平安金融中心116层Free Sky云际观光层",
+            "address": "福田区益田路5033号116层",
+            "location": {
+              "longitude": 114.053,
+              "latitude": 22.542
+            },
+            "visit_duration": 90,
+            "description": "深圳第一高楼548米高空360°观景，俯瞰香港落马洲与深圳湾大桥",
+            "category": "景点",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 200
+          }
+        ],
+        "meals": [
+          {
+            "type": "lunch",
+            "name": "华侨城·波托菲诺湖畔餐厅",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 320
+          },
+          {
+            "type": "dinner",
+            "name": "瑞吉酒店·秀·Social餐厅自助",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 498
+          }
+        ]
+      }
+    ],
+    "weather_info": [
+      {
+        "date": "2026-03-23",
+        "day_weather": "多云",
+        "night_weather": "多云",
+        "day_temp": 28,
+        "night_temp": 23,
+        "wind_direction": "东风",
+        "wind_power": "2级"
+      },
+      {
+        "date": "2026-03-24",
+        "day_weather": "阴",
+        "night_weather": "阴",
+        "day_temp": 29,
+        "night_temp": 24,
+        "wind_direction": "东南风",
+        "wind_power": "2级"
+      }
+    ],
+    "overall_suggestions": "全程入住深圳鹏瑞莱佛士酒店，可享代客泊车和24小时管家服务；长廊酒吧需提前48小时电话预约并预付定金；波托菲诺湖区建议上午前往，人少光线佳；平安大厦观光层傍晚17:00前入场可看日落；两日均打车为主，高峰时段提前10分钟叫车；携带薄外套，高空区域夜间风大；预算已含10%机动金，可现场升级香槟或加购直升机观光。",
+    "budget": {
+      "total_attractions": 200,
+      "total_hotels": 7000,
+      "total_meals": 2698,
+      "total_transportation": 200,
+      "total": 11098
+    }
+  },
+  "quality": {
+    "timestamp": "2026-03-21T23:12:41.711087",
+    "test_case": {
+      "city": "深圳",
+      "start_date": "2026-03-23",
+      "end_date": "2026-03-24",
+      "travel_days": 2,
+      "transportation": "自驾",
+      "accommodation": "豪华型酒店",
+      "preferences": [
+        "休闲",
+        "美食"
+      ],
+      "free_text_input": "极致奢华的体验"
+    },
+    "dimensions": {
+      "attractions": {
+        "count": 4,
+        "avg_description_length": 45,
+        "luxury_keyword_count": 4,
+        "with_location_count": 4,
+        "location_rate": 100.0,
+        "list": [
+          {
+            "name": "深圳湾1号·云颂",
+            "description": "顶级城市地标综合体，含奢华公寓、莱佛士酒店及360°空中观光台，可俯瞰深圳湾与香港天际线，专属管家服务与直升机停机坪体验"
+          },
+          {
+            "name": "鹏瑞莱佛士酒店·长廊酒吧",
+            "description": "全球最高莱佛士酒吧，300米高空云端长廊，香槟王Dom Pérignon专属酒窖，每晚限量鱼子酱与爵士乐现场"
+          },
+          {
+            "name": "华侨城·波托菲诺纯水岸",
+            "description": "意大利小镇风情湖区，环湖步道、天鹅船与湖畔咖啡，可体验油画写生与手冲咖啡"
+          }
+        ]
+      },
+      "hotels": {
+        "count": 1,
+        "is_luxury_brand": true,
+        "luxury_keywords": [
+          "莱佛士"
+        ],
+        "list": [
+          "鹏瑞莱佛士酒店·长廊酒吧"
+        ]
+      },
+      "restaurants": {
+        "count": 4,
+        "has_michelin": false,
+        "avg_cost": 674,
+        "list": [
+          {
+            "name": "鹏瑞莱佛士酒店·云璟中餐厅",
+            "cost": 680
+          },
+          {
+            "name": "长廊酒吧香槟鱼子酱套餐",
+            "cost": 1200
+          },
+          {
+            "name": "华侨城·波托菲诺湖畔餐厅",
+            "cost": 320
+          }
+        ]
+      },
+      "itinerary": {
+        "days": 2,
+        "unique_districts": 2,
+        "districts": [
+          "福田区",
+          "南山区"
+        ],
+        "has_transportation": true
+      },
+      "suggestions": {
+        "length": 155,
+        "has_booking_tips": true,
+        "has_weather_tips": true,
+        "has_budget_tips": true,
+        "preview": "全程入住深圳鹏瑞莱佛士酒店，可享代客泊车和24小时管家服务；长廊酒吧需提前48小时电话预约并预付定金；波托菲诺湖区建议上午前往，人少光线佳；平安大厦观光层傍晚17:00前入场可看日落；两日均打车为主，高峰时段提前10分钟叫车；携带薄外套，高空区域夜间风大；预算已含10%机动金，可现场升级香槟或加购直..."
+      },
+      "budget": {
+        "total": 11098,
+        "attractions": 200,
+        "hotels": 7000,
+        "meals": 2698,
+        "transportation": 200
+      }
+    },
+    "summary": {
+      "total_budget": 11098,
+      "attraction_count": 4,
+      "restaurant_count": 4,
+      "has_michelin": false,
+      "is_luxury": true,
+      "suggestion_length": 155
+    }
+  },
+  "timestamp": "2026-03-21T23:12:41.712337"
+}

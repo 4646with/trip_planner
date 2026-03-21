@@ -1,0 +1,154 @@
+{
+  "result": {
+    "city": "深圳",
+    "start_date": "2026-03-23",
+    "end_date": "2026-03-24",
+    "days": [
+      {
+        "date": "2026-03-23",
+        "day_index": 1,
+        "description": "南山云端奢华体验日：上午登临深圳湾一号·云境会所俯瞰双城，午餐于会所米其林私厨，下午前往蛇口海上世界登上招商局·明华轮「邮轮酒店」，傍晚甲板香槟晚宴，夜宿邮轮船长套房。",
+        "transportation": "打车",
+        "accommodation": "招商局·明华轮「邮轮酒店」",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "深圳湾一号·云境",
+            "address": "南山区科苑南路中国华润大厦旁",
+            "location": {
+              "longitude": 113.93613,
+              "latitude": 22.48384
+            },
+            "visit_duration": 180,
+            "description": "深圳湾一号顶层云端会所，360°俯瞰深港双城天际线，直升机接驳、米其林私厨晚宴、限量香槟浴，专属管家全程陪同，为极少数人开放的极致奢华体验。",
+            "category": "私人会所",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          },
+          {
+            "name": "招商局·明华轮「邮轮酒店」",
+            "address": "南山区蛇口海上世界",
+            "location": {
+              "longitude": 113.91583,
+              "latitude": 22.48155
+            },
+            "visit_duration": 240,
+            "description": "退役邮轮改造的奢华酒店，仅开放10间船长套房，私人甲板晚宴、深海蓝鳍金枪鱼现场解体秀、雪茄与干邑定制舱，海上劳斯莱斯接驳。",
+            "category": "邮轮酒店",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "lunch",
+            "name": "云境会所米其林私厨",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 1200
+          },
+          {
+            "type": "dinner",
+            "name": "邮轮甲板深海金枪鱼解体晚宴",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 1800
+          }
+        ]
+      },
+      {
+        "date": "2026-03-24",
+        "day_index": 2,
+        "description": "福田CBD慢旅日：睡到自然醒，邮轮早餐后离船，打车前往深圳四季酒店办理入住并享用高空下午茶，傍晚于丽思卡尔顿·Palace Kitchen品尝黑珍珠粤菜，夜晚可在酒店55层云端酒吧小酌。",
+        "transportation": "打车",
+        "accommodation": "深圳四季酒店",
+        "hotel": null,
+        "attractions": [],
+        "meals": [
+          {
+            "type": "brunch",
+            "name": "邮轮船长早餐厅",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 350
+          },
+          {
+            "type": "afternoon_tea",
+            "name": "深圳四季酒店·47层高空茶廊",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 480
+          },
+          {
+            "type": "dinner",
+            "name": "深圳丽思卡尔顿·Palace Kitchen",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 900
+          }
+        ]
+      }
+    ],
+    "weather_info": [
+      {
+        "date": "2026-03-23",
+        "day_weather": "多云",
+        "night_weather": "多云",
+        "day_temp": 26,
+        "night_temp": 22,
+        "wind_direction": "无持续风向",
+        "wind_power": "微风"
+      },
+      {
+        "date": "2026-03-24",
+        "day_weather": "多云",
+        "night_weather": "多云",
+        "day_temp": 27,
+        "night_temp": 23,
+        "wind_direction": "无持续风向",
+        "wind_power": "微风"
+      }
+    ],
+    "overall_suggestions": "全程轻装，带一件薄外套即可；海上世界与邮轮多为户外甲板，建议防滑鞋；云境及邮轮体验需提前48小时预约并预付定金；福田CBD高楼林立，打车定位务必准确；行程已最大化保留休闲空档，可随时在酒店SPA或咖啡廊放空；若需直升机接驳云境，请提前一周与管家确认空域审批。",
+    "budget": {
+      "total_attractions": 0,
+      "total_hotels": 7000,
+      "total_meals": 4730,
+      "total_transportation": 200,
+      "total": 13023
+    }
+  },
+  "log_capture": {
+    "web_search_queries": [
+      "system",
+      "搜索网络获取景点攻略、餐厅推荐菜、旅行tips等详细信息\\n\\n    使用方式：直接传入完整的搜索查询字符串（模板已固定，Agent 只填入实体名称）\\n    例如：\\n    - 景点：\"故宫博物院 游览攻略 必去理由 2024\"\\n    - 餐厅：\"全聚德 北京 招牌菜 人均\"",
+      "system",
+      "搜索网络获取景点攻略、餐厅推荐菜、旅行tips等详细信息\\n\\n    使用方式：直接传入完整的搜索查询字符串（模板已固定，Agent 只填入实体名称）\\n    例如：\\n    - 景点：\"故宫博物院 游览攻略 必去理由 2024\"\\n    - 餐厅：\"全聚德 北京 招牌菜 人均\"",
+      "system",
+      "system",
+      "system",
+      "system",
+      "system",
+      "system",
+      "搜索网络获取景点攻略、餐厅推荐菜、旅行tips等详细信息\\n\\n    使用方式：直接传入完整的搜索查询字符串（模板已固定，Agent 只填入实体名称）\\n    例如：\\n    - 景点：\"故宫博物院 游览攻略 必去理由 2024\"\\n    - 餐厅：\"全聚德 北京 招牌菜 人均\"",
+      "system",
+      "system",
+      "system",
+      "system",
+      "system"
+    ],
+    "text_search_params": [],
+    "route_origins": []
+  }
+}

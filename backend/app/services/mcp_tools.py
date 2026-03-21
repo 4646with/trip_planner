@@ -35,6 +35,14 @@ class TextSearchToolInput(BaseModel):
     city: str = Field(..., description="城市名称，如 '北京'、'深圳'")
     citylimit: bool = Field(default=True, description="是否限制在城市范围内搜索")
     district: Optional[str] = Field(default=None, description="区县名称，如 '南山区'")
+    location: Optional[str] = Field(
+        default=None,
+        description="中心点坐标，格式：'经度,纬度'，如 '116.397428,39.90923'。指定后将在此坐标附近搜索",
+    )
+    radius: Optional[int] = Field(
+        default=5000,
+        description="搜索半径，单位米，默认5000。范围：0-50000，仅当指定location时有效",
+    )
 
 
 class DirectionToolInput(BaseModel):
@@ -83,7 +91,9 @@ def create_tool_wrapper(
     """
 
     async def wrapper(**kwargs) -> str:
-        last_error: Optional[Exception] = None
+        # 记录调用参数（用于测试验证）
+        logger.info(f"[{tool_name}] 调用参数: {kwargs}")
+        last_error: Optional[Exception] = Exception("未知错误")
         for attempt in range(1, max_retries + 1):
             try:
                 return await mcp_tool.ainvoke(kwargs)
@@ -99,7 +109,9 @@ def create_tool_wrapper(
                     logger.error(
                         f"[{tool_name}] 已重试 {max_retries} 次，全部失败: {e}"
                     )
-        raise last_error
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"[{tool_name}] 调用失败")
 
     return StructuredTool(
         name=tool_name,

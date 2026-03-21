@@ -1,0 +1,121 @@
+{
+  "result": {
+    "city": "深圳",
+    "start_date": "2026-03-23",
+    "end_date": "2026-03-24",
+    "days": [
+      {
+        "date": "2026-03-23",
+        "day_index": 1,
+        "description": "入住深圳最高奢酒店，俯瞰深圳湾，米其林晚宴+高空SPA慢享",
+        "transportation": "酒店专车/步行",
+        "accommodation": "深圳鹏瑞莱佛士酒店",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "深圳湾一号",
+            "address": "深圳市南山区科苑南路与东滨路交汇处",
+            "location": {
+              "longitude": 113.9327,
+              "latitude": 22.4839
+            },
+            "visit_duration": 180,
+            "description": "顶级城市综合体，含奢华公寓、莱佛士酒店、云颂音乐厅及360°天际酒吧，可俯瞰深圳湾与香港，享受米其林晚宴与高空SPA。",
+            "category": "奢华地标",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          },
+          {
+            "name": "深圳鹏瑞莱佛士酒店",
+            "address": "深圳市南山区中心路3008号深圳湾一号T7座",
+            "location": {
+              "longitude": 113.9325,
+              "latitude": 22.4841
+            },
+            "visit_duration": 240,
+            "description": "深圳最高奢酒店，71层高空大堂、意大利云石楼梯、米其林星级餐厅「瑞」、顶层星空酒吧「长廊」，尊享直升机接送与铂金管家。",
+            "category": "奢华酒店",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          }
+        ],
+        "meals": [
+          {
+            "type": "lunch",
+            "name": "瑞·米其林星级餐厅（酒店71F）",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 800
+          },
+          {
+            "type": "dinner",
+            "name": "云颂Skybar 360°天际酒吧",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 600
+          }
+        ]
+      },
+      {
+        "date": "2026-03-24",
+        "day_index": 2,
+        "description": "睡到自然醒，湾畔慢享早午餐后返程",
+        "transportation": "酒店专车/打车",
+        "accommodation": "深圳鹏瑞莱佛士酒店",
+        "hotel": null,
+        "attractions": [],
+        "meals": [
+          {
+            "type": "brunch",
+            "name": "莱佛士长廊自助餐厅",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 400
+          }
+        ]
+      }
+    ],
+    "weather_info": [
+      {
+        "date": "2026-03-23",
+        "day_weather": "晴",
+        "night_weather": "晴",
+        "day_temp": 27,
+        "night_temp": 22,
+        "wind_direction": "东风",
+        "wind_power": "2级"
+      },
+      {
+        "date": "2026-03-24",
+        "day_weather": "多云",
+        "night_weather": "晴",
+        "day_temp": 28,
+        "night_temp": 23,
+        "wind_direction": "东南风",
+        "wind_power": "2级"
+      }
+    ],
+    "overall_suggestions": "全程步行或酒店专车即可，无需跨区奔波；酒店自带米其林餐饮与高空SPA，可充分满足“休闲+美食”诉求。建议提前48小时预约瑞餐厅及云颂酒吧靠窗席位，享受深圳湾日落；次日睡到自然醒，12:00前退房即可。",
+    "budget": {
+      "total_attractions": 0,
+      "total_hotels": 7500,
+      "total_meals": 1800,
+      "total_transportation": 100,
+      "total": 10240
+    }
+  },
+  "log_capture": {
+    "web_search_queries": [],
+    "text_search_params": [],
+    "route_origins": []
+  }
+}

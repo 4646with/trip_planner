@@ -1,0 +1,146 @@
+{
+  "result": {
+    "city": "深圳",
+    "start_date": "2026-03-23",
+    "end_date": "2026-03-24",
+    "days": [
+      {
+        "date": "2026-03-23",
+        "day_index": 0,
+        "description": "南山区奢华地标打卡+云端下午茶+米其林晚宴",
+        "transportation": "驾车/打车",
+        "accommodation": "深圳湾一号·莱佛士酒店",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "深圳湾一号",
+            "address": "深圳市南山区科苑南路与东滨路交汇处",
+            "location": {
+              "longitude": 113.931388,
+              "latitude": 22.483333
+            },
+            "visit_duration": 180,
+            "description": "全球顶级综合体地标，涵盖奢华酒店、米其林餐厅、云端泳池、私人游艇会、直升机停机坪，可预约私人定制服务，深圳奢华天花板。",
+            "category": "综合体",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 0
+          },
+          {
+            "name": "深圳瑞吉酒店·云端下午茶",
+            "address": "深圳市罗湖区深南东路5016号瑞吉酒店96层",
+            "location": {
+              "longitude": 114.147222,
+              "latitude": 22.543611
+            },
+            "visit_duration": 150,
+            "description": "96层300米高空，专属管家服务，香槟鱼子酱塔、定制甜品、限量香槟，俯瞰香港山景，每日限12席，需提前48小时预订。",
+            "category": "酒店",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 1688
+          }
+        ],
+        "meals": [
+          {
+            "type": "lunch",
+            "name": "深圳湾一号·莱佛士酒店·云璟中餐厅",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 680
+          },
+          {
+            "type": "dinner",
+            "name": "深圳文华东方·两星米其林餐厅",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 1200
+          }
+        ]
+      },
+      {
+        "date": "2026-03-24",
+        "day_index": 1,
+        "description": "高空观光+市区轻松漫步+返程前休闲",
+        "transportation": "驾车/打车",
+        "accommodation": "深圳湾一号·莱佛士酒店",
+        "hotel": null,
+        "attractions": [
+          {
+            "name": "深圳平安金融中心·云际观光层",
+            "address": "深圳市福田区益田路5033号",
+            "location": {
+              "longitude": 114.059444,
+              "latitude": 22.537222
+            },
+            "visit_duration": 90,
+            "description": "深圳第一高楼547米云端观景，360°俯瞰深港都市天际线，含AR互动体验。",
+            "category": "观光",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 180
+          }
+        ],
+        "meals": [
+          {
+            "type": "lunch",
+            "name": "平安金融中心·Free云际餐厅",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 450
+          },
+          {
+            "type": "dinner",
+            "name": "深圳湾一号·私人定制晚宴（游艇会）",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 1500
+          }
+        ]
+      }
+    ],
+    "weather_info": [
+      {
+        "date": "2026-03-23",
+        "day_weather": "多云",
+        "night_weather": "晴",
+        "day_temp": 27,
+        "night_temp": 22,
+        "wind_direction": "东南风",
+        "wind_power": "3级"
+      },
+      {
+        "date": "2026-03-24",
+        "day_weather": "晴",
+        "night_weather": "晴",
+        "day_temp": 28,
+        "night_temp": 23,
+        "wind_direction": "东南风",
+        "wind_power": "2级"
+      }
+    ],
+    "overall_suggestions": "全程已按‘奢华+美食+休闲’定制：入住深圳湾一号莱佛士酒店，步行即可体验顶级综合体；24h管家服务+私家游艇会+直升机停机坪随时预约。餐饮安排云端米其林下午茶、双星米其林晚宴及私人定制海鲜宴，建议提前48小时电话确认席位。交通全程打车或酒店专车，避开早晚高峰（8:00-9:30/17:30-19:00）。观光点控制在2-3处，留足时间享受酒店泳池与SPA。携带薄外套，室内空调较冷；多云转晴天气适合拍照，可带墨镜。预算已按10%备用金上浮，现场额外消费（游艇出海、直升机观光、SPA）可按需添加。",
+    "budget": {
+      "total_attractions": 1868,
+      "total_hotels": 9000,
+      "total_meals": 3830,
+      "total_transportation": 200,
+      "total": 16108
+    }
+  },
+  "log_capture": {
+    "web_search_queries": [],
+    "text_search_params": [],
+    "route_origins": []
+  }
+}
