@@ -3,13 +3,21 @@ from ..config import get_settings
 from pydantic import SecretStr
 
 import os
+import asyncio
 
 # 设置代理（如果配置了）
 _http_proxy = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
 _https_proxy = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+if _http_proxy:
+    os.environ["HTTP_PROXY"] = _http_proxy
 if _https_proxy:
     os.environ["HTTPS_PROXY"] = _https_proxy
+if _https_proxy:
     print(f"[LLM] 使用代理: {_https_proxy}")
+
+# Gemini 限流：免费版 RPM 5
+_llm_calls = []
+_llm_lock = asyncio.Lock()
 
 
 def get_llm():

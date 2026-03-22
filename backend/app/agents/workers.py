@@ -100,26 +100,56 @@ AGENT_REGISTRY = {
 
 
 def with_retry_and_log(func):
-    """统一的异常处理和日志装饰器"""
+    """统一的异常处理和日志装饰器，支持 Gemini 429 重试"""
+    import re as regex_module
 
     @wraps(func)
     async def wrapper(self, state: AgentState, *args, **kwargs):
         agent_name = self.name
         print(f"[{agent_name}] 开始执行...")
-        try:
-            result = await func(self, state, *args, **kwargs)
-            print(f"[{agent_name}] 执行成功")
-            return result
-        except Exception as e:
-            print(f"[{agent_name}] 执行失败: {str(e)}")
-            import traceback
 
-            traceback.print_exc()
-            return {
-                "messages": state.get("messages", []),
-                self.output_key: [],  # 必须是列表类型
-                "agent_results": self._update_agent_results(state, success=False),
-            }
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                result = await func(self, state, *args, **kwargs)
+                print(f"[{agent_name}] 执行成功")
+                return result
+            except Exception as e:
+                error_str = str(e)
+
+                # 检查是否是 429 限流错误
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    # 提取等待时间
+                    wait_match = regex_module.search(r"retry in ([\d.]+)s", error_str)
+                    if wait_match:
+                        wait_time = float(wait_match.group(1)) + 1  # 多等 1 秒
+                        print(
+                            f"[{agent_name}] 触发限流，等待 {wait_time:.1f}s (尝试 {attempt}/{max_retries})"
+                        )
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        print(
+                            f"[{agent_name}] 429 限流，等待 20s (尝试 {attempt}/{max_retries})"
+                        )
+                        await asyncio.sleep(20)
+                        continue
+
+                # 其他错误
+                print(f"[{agent_name}] 执行失败: {error_str[:200]}")
+                if attempt < max_retries:
+                    print(f"[{agent_name}] 重试中... ({attempt}/{max_retries})")
+                    await asyncio.sleep(5)
+                    continue
+
+                import traceback
+
+                traceback.print_exc()
+                return {
+                    "messages": state.get("messages", []),
+                    self.output_key: [],
+                    "agent_results": self._update_agent_results(state, success=False),
+                }
 
     return wrapper
 
@@ -303,10 +333,23 @@ class BaseWorker:
 class WorkerExecutor:
     """动态 Worker 执行器 - 高扩展性与高并发设计"""
 
-    def __init__(self, llm, max_concurrency: int = 40):
+    def __init__(self, llm, max_concurrency: int = 5):
+        """
+        max_concurrency: 最大并发数
+        - Gemini 免费版 RPM 5，建议 1-2
+        - 智谱AI，建议 5-10
+        """
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._manager = AgentFactory(llm)
         self._workers: Dict[str, BaseWorker] = {}
+
+        import os
+
+        _provider = os.getenv("LLM_PROVIDER", "").lower()
+        if _provider == "gemini":
+            print(f"[WorkerExecutor] Gemini 模式，并发限制: 1")
+        else:
+            print(f"[WorkerExecutor] 智谱AI模式，并发限制: {max_concurrency}")
 
         for agent_id, config in AGENT_REGISTRY.items():
             tools = get_mcp_manager().get_tools_by_names(config["tools"])

@@ -1,4 +1,18 @@
 {
+  "timestamp": "2026-03-22T13:18:05.210047",
+  "test_case": {
+    "city": "深圳",
+    "start_date": "2026-03-23",
+    "end_date": "2026-03-24",
+    "travel_days": 2,
+    "transportation": "自驾",
+    "accommodation": "豪华型酒店",
+    "preferences": [
+      "休闲",
+      "美食"
+    ],
+    "free_text_input": "极致奢华的体验"
+  },
   "result": {
     "city": "深圳",
     "start_date": "2026-03-23",
@@ -7,61 +21,59 @@
       {
         "date": "2026-03-23",
         "day_index": 0,
-        "description": "第一天抵达深圳，入住顶奢酒店，随后前往深圳湾公园漫步，感受海风与城市天际线，晚餐享用精致粤菜。",
-        "transportation": "打车/私人接送",
-        "accommodation": "深圳鹏瑞莱佛士酒店",
-        "hotel": {
-          "name": "深圳鹏瑞莱佛士酒店",
-          "address": "南山区中心路3008号深圳湾1号T7栋",
-          "location": {
-            "longitude": 113.945,
-            "latitude": 22.508
-          },
-          "price_range": "3000-5000",
-          "rating": "4.9",
-          "distance": "距离深圳湾公园约1.5公里",
-          "type": "豪华型酒店",
-          "estimated_cost": 3500
-        },
+        "description": "高端购物与云端夜景，入住地标瑞吉",
+        "transportation": "打车",
+        "accommodation": "深圳瑞吉酒店",
+        "hotel": null,
         "attractions": [
           {
-            "name": "深圳湾公园",
-            "address": "南山区滨海大道",
+            "name": "深圳湾万象城",
+            "address": "深圳市南山区科苑南路2888号",
             "location": {
-              "longitude": 113.935,
-              "latitude": 22.495
+              "longitude": 113.94007,
+              "latitude": 22.48333
             },
-            "visit_duration": 180,
-            "description": "连接南山与福田的海滨公园，是休闲漫步、观赏红树林和对岸香港景观的绝佳地点。",
-            "category": "自然景观",
-            "rating": 4.7,
+            "visit_duration": 240,
+            "description": "深圳顶级购物中心，汇聚LV、Hermès、Dior等一线奢侈品牌，拥有米其林餐厅与高端私享会所，是奢华购物与美食体验的终极目的地",
+            "category": "购物娱乐",
+            "rating": 0.0,
             "photos": [],
-            "poi_id": "sz_park_001",
-            "image_url": "https://example.com/sz_bay.jpg",
+            "poi_id": "",
+            "image_url": "",
             "ticket_price": 0
+          },
+          {
+            "name": "平安金融中心116层Free Sky云际观光层",
+            "address": "深圳市福田区益田路5033号",
+            "location": {
+              "longitude": 114.0535,
+              "latitude": 22.5347
+            },
+            "visit_duration": 90,
+            "description": "深圳第一高楼360°云端观景台，俯瞰深港双城天际线与落日余晖",
+            "category": "观光",
+            "rating": 0.0,
+            "photos": [],
+            "poi_id": "",
+            "image_url": "",
+            "ticket_price": 200
           }
         ],
         "meals": [
           {
             "type": "lunch",
-            "name": "利苑酒家",
-            "address": "罗湖区华润万象城",
-            "location": {
-              "longitude": 114.11,
-              "latitude": 22.54
-            },
-            "description": "老牌米其林粤菜，冰烧三层肉是必点项目。",
-            "estimated_cost": 400
+            "name": "深圳湾万象城·Ensue（米其林一星加州融合菜）",
+            "address": "",
+            "location": null,
+            "description": "",
+            "estimated_cost": 800
           },
           {
             "type": "dinner",
-            "name": "云璟 (莱佛士酒店)",
-            "address": "南山区中心路3008号莱佛士酒店70楼",
-            "location": {
-              "longitude": 113.945,
-              "latitude": 22.508
-            },
-            "description": "位于云端的高空餐厅，提供极具创意的现代粤菜，视野极佳。",
+            "name": "深圳瑞吉酒店·The Drawing Room（云端英式下午茶+香槟晚餐）",
+            "address": "",
+            "location": null,
+            "description": "",
             "estimated_cost": 1200
           }
         ]
@@ -69,66 +81,19 @@
       {
         "date": "2026-03-24",
         "day_index": 1,
-        "description": "第二天体验深圳的文艺与摩登，上午前往华侨城创意园，下午在欢乐海岸享受悠闲时光，结束愉快的旅程。",
+        "description": "睡到自然醒，湾区风情早午餐后返程",
         "transportation": "打车",
-        "accommodation": "无",
+        "accommodation": "",
         "hotel": null,
-        "attractions": [
-          {
-            "name": "华侨城创意文化园 (OCT-LOFT)",
-            "address": "南山区锦绣北街",
-            "location": {
-              "longitude": 113.99,
-              "latitude": 22.54
-            },
-            "visit_duration": 120,
-            "description": "由旧工业区改造而成的文创基地，布满了艺术工作室、特色书店和咖啡馆，氛围极其休闲。",
-            "category": "文化艺术",
-            "rating": 4.6,
-            "photos": [],
-            "poi_id": "sz_oct_002",
-            "image_url": "https://example.com/oct_loft.jpg",
-            "ticket_price": 0
-          },
-          {
-            "name": "欢乐海岸",
-            "address": "南山区白石路东8号",
-            "location": {
-              "longitude": 113.99,
-              "latitude": 22.52
-            },
-            "visit_duration": 150,
-            "description": "融合了商业、餐饮与水景表演的综合休闲区，适合午后散步和美食探索。",
-            "category": "休闲商业",
-            "rating": 4.5,
-            "photos": [],
-            "poi_id": "sz_happy_003",
-            "image_url": "https://example.com/happy_coast.jpg",
-            "ticket_price": 0
-          }
-        ],
+        "attractions": [],
         "meals": [
           {
-            "type": "lunch",
-            "name": "悦景轩",
-            "address": "南山区华侨城",
-            "location": {
-              "longitude": 113.99,
-              "latitude": 22.53
-            },
-            "description": "环境优雅的高端中餐厅，以精致的摆盘和地道的口味著称。",
+            "type": "brunch",
+            "name": "深圳鹏瑞莱佛士酒店·The French Window（半自助早午餐配香槟）",
+            "address": "",
+            "location": null,
+            "description": "",
             "estimated_cost": 600
-          },
-          {
-            "type": "dinner",
-            "name": "胜记海鲜",
-            "address": "南山区欢乐海岸",
-            "location": {
-              "longitude": 113.99,
-              "latitude": 22.52
-            },
-            "description": "深圳老牌海鲜食府，食材新鲜，烹饪手法专业。",
-            "estimated_cost": 500
           }
         ]
       }
@@ -137,124 +102,29 @@
       {
         "date": "2026-03-23",
         "day_weather": "多云",
-        "night_weather": "晴",
-        "day_temp": 24,
-        "night_temp": 18,
-        "wind_direction": "东南风",
-        "wind_power": "3级"
+        "night_weather": "多云",
+        "day_temp": 25,
+        "night_temp": 21,
+        "wind_direction": "东风",
+        "wind_power": "2级"
       },
       {
         "date": "2026-03-24",
-        "day_weather": "晴",
+        "day_weather": "多云",
         "night_weather": "多云",
         "day_temp": 26,
-        "night_temp": 19,
-        "wind_direction": "东风",
+        "night_temp": 22,
+        "wind_direction": "东南风",
         "wind_power": "2级"
       }
     ],
-    "overall_suggestions": "深圳3月气候宜人，非常适合户外休闲。由于您偏好豪华型酒店和美食，推荐全程入住南山区的高端酒店（如莱佛士或柏悦），这里集中了深圳最顶级的餐饮资源。行程安排较为宽松，重点在于享受慢节奏的城市生活与高品质的粤菜体验。建议提前预约云璟等热门高空餐厅，以确保拥有景观位。",
+    "overall_suggestions": "全程打车减少步行，留足购物与用餐时间；两天气温舒适，建议轻便春装+薄外套；Free Sky建议傍晚到访，可同时收获日落与夜景；瑞吉与莱佛士均提供24h管家服务，可提前沟通延迟退房与行李寄存。",
     "budget": {
-      "total_attractions": 0,
-      "total_hotels": 3500,
-      "total_meals": 2700,
+      "total_attractions": 200,
+      "total_hotels": 5600,
+      "total_meals": 2600,
       "total_transportation": 200,
-      "total": 7040
+      "total": 9460
     }
-  },
-  "quality": {
-    "timestamp": "2026-03-22T00:23:58.424177",
-    "test_case": {
-      "city": "深圳",
-      "start_date": "2026-03-23",
-      "end_date": "2026-03-24",
-      "travel_days": 2,
-      "transportation": "自驾",
-      "accommodation": "豪华型酒店",
-      "preferences": [
-        "休闲",
-        "美食"
-      ],
-      "free_text_input": "极致奢华的体验"
-    },
-    "dimensions": {
-      "attractions": {
-        "count": 3,
-        "avg_description_length": 36,
-        "luxury_keyword_count": 0,
-        "with_location_count": 3,
-        "location_rate": 100.0,
-        "list": [
-          {
-            "name": "深圳湾公园",
-            "description": "连接南山与福田的海滨公园，是休闲漫步、观赏红树林和对岸香港景观的绝佳地点。"
-          },
-          {
-            "name": "华侨城创意文化园 (OCT-LOFT)",
-            "description": "由旧工业区改造而成的文创基地，布满了艺术工作室、特色书店和咖啡馆，氛围极其休闲。"
-          },
-          {
-            "name": "欢乐海岸",
-            "description": "融合了商业、餐饮与水景表演的综合休闲区，适合午后散步和美食探索。"
-          }
-        ]
-      },
-      "hotels": {
-        "count": 0,
-        "is_luxury_brand": false,
-        "luxury_keywords": [],
-        "list": []
-      },
-      "restaurants": {
-        "count": 4,
-        "has_michelin": true,
-        "avg_cost": 675,
-        "list": [
-          {
-            "name": "利苑酒家",
-            "cost": 400
-          },
-          {
-            "name": "云璟 (莱佛士酒店)",
-            "cost": 1200
-          },
-          {
-            "name": "悦景轩",
-            "cost": 600
-          }
-        ]
-      },
-      "itinerary": {
-        "days": 2,
-        "unique_districts": 1,
-        "districts": [
-          "南山区"
-        ],
-        "has_transportation": true
-      },
-      "suggestions": {
-        "length": 130,
-        "has_booking_tips": true,
-        "has_weather_tips": false,
-        "has_budget_tips": false,
-        "preview": "深圳3月气候宜人，非常适合户外休闲。由于您偏好豪华型酒店和美食，推荐全程入住南山区的高端酒店（如莱佛士或柏悦），这里集中了深圳最顶级的餐饮资源。行程安排较为宽松，重点在于享受慢节奏的城市生活与高品质的粤菜体验。建议提前预约云璟等热门高空餐厅，以确保拥有景观位。"
-      },
-      "budget": {
-        "total": 7040,
-        "attractions": 0,
-        "hotels": 3500,
-        "meals": 2700,
-        "transportation": 200
-      }
-    },
-    "summary": {
-      "total_budget": 7040,
-      "attraction_count": 3,
-      "restaurant_count": 4,
-      "has_michelin": true,
-      "is_luxury": false,
-      "suggestion_length": 130
-    }
-  },
-  "timestamp": "2026-03-22T00:23:58.424177"
+  }
 }
