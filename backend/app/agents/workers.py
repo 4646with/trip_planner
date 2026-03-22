@@ -319,14 +319,18 @@ class BaseWorker:
         call_count = state.get("agent_call_count", {}).get(self.name, 0)
         retry_context = ""
         if call_count > 0:
-            my_errors = [e for e in state.get("errors", []) if e.get("agent") == self.name]
+            my_errors = [
+                e for e in state.get("errors", []) if e.get("agent") == self.name
+            ]
             recent_errors = my_errors[-3:] if len(my_errors) >= 3 else my_errors
             if recent_errors:
                 error_lines = []
                 for e in recent_errors:
                     err_msg = e.get("error", "")[:200]
                     hint_key = _classify_error(err_msg)
-                    error_lines.append(f"- ❌ {err_msg} → {RETRY_ERROR_HINTS[hint_key]}")
+                    error_lines.append(
+                        f"- ❌ {err_msg} → {RETRY_ERROR_HINTS[hint_key]}"
+                    )
                 retry_context = (
                     f"\n【重试说明 - 第{call_count + 1}次尝试】\n"
                     + "之前执行失败记录：\n"
@@ -441,6 +445,33 @@ class WorkerExecutor:
 
 
 # ==========================================
+# Planner 数据清洗工具
+# ==========================================
+def _extract_planner_fields(data: list) -> list:
+    """
+    精准提取 Planner 关心的字段，优先体感字段，降级基础字段
+    每类数据最多3条，每字段最多100字
+    """
+    if not isinstance(data, list):
+        return []
+
+    PREFERRED = ["name", "vibe_summary", "tips", "best_time", "visiting_duration"]
+    FALLBACK = ["name", "address", "description", "visit_duration"]
+
+    cleaned = []
+    for item in data[:3]:
+        if any(item.get(f) for f in PREFERRED):
+            cleaned.append(
+                {k: str(item.get(k, ""))[:100] for k in PREFERRED if item.get(k)}
+            )
+        else:
+            cleaned.append(
+                {k: str(item.get(k, ""))[:100] for k in FALLBACK if item.get(k)}
+            )
+    return cleaned
+
+
+# ==========================================
 # Planner 节点
 # ==========================================
 class Planner:
@@ -452,43 +483,38 @@ class Planner:
     async def generate(self, state: AgentState) -> Dict[str, Any]:
         logger.info("Planner 正在生成最终方案...")
 
-        attractions = state.get("attractions", {})
-        weather_info = state.get("weather_info", {})
-        hotels = state.get("hotels", {})
-        routes = state.get("routes", {})
+        attractions = state.get("attractions", [])
+        weather_info = state.get("weather_info", [])
+        hotels = state.get("hotels", [])
+        routes = state.get("routes", [])
 
         logger.info(
-            f"Planner 收到的结构化数据: attractions={bool(attractions)}, weather={bool(weather_info)}, hotels={bool(hotels)}, routes={bool(routes)}"
+            f"Planner 精准提取数据: attractions={len(attractions)}, weather={len(weather_info)}, hotels={len(hotels)}, routes={len(routes)}"
         )
 
         accommodation = state.get("accommodation", "未知")
         preferences = state.get("preferences", [])
         preferences_str = ", ".join(preferences) if preferences else "无"
 
-        planner_prompt = AgentPrompts.PLANNER.format(
-            accommodation=accommodation, preferences=preferences_str
-        )
+        attractions_context = _extract_planner_fields(attractions)
+        hotels_context = _extract_planner_fields(hotels)
+        weather_context = weather_info[:3]
+        routes_context = routes[:3]
 
         planner_messages = [
-            SystemMessage(content=planner_prompt),
+            SystemMessage(content=AgentPrompts.PLANNER),
             HumanMessage(
-                content=f"""
-请根据以下结构化数据生成旅行计划。
-
+                content=f"""【任务上下文】
 目标城市: {state.get("city", "未知")}
-旅行日期: {state.get("start_date", "未知")} 至 {state.get("end_date", "未知")}
-旅行天数: {state.get("travel_days", 0)}天
+旅行日期: {state.get("start_date", "未知")} 至 {state.get("end_date", "未知")}（共 {state.get("travel_days", 0)} 天）
 住宿偏好: {accommodation}
 旅行偏好: {preferences_str}
 
-【结构化数据】:
-景点数据: {json.dumps(attractions, ensure_ascii=False)[:500]}
-天气数据: {json.dumps(weather_info, ensure_ascii=False)[:500]}
-酒店数据: {json.dumps(hotels, ensure_ascii=False)[:300]}
-路线数据: {json.dumps(routes, ensure_ascii=False)[:500]}
-
-请严格遵守输出格式。
-"""
+【核心素材】:
+景点详情: {json.dumps(attractions_context, ensure_ascii=False)[:800]}
+酒店详情: {json.dumps(hotels_context, ensure_ascii=False)[:500]}
+天气概况: {json.dumps(weather_context, ensure_ascii=False)[:500]}
+交通建议: {json.dumps(routes_context, ensure_ascii=False)[:500]}"""
             ),
         ]
 
