@@ -112,10 +112,8 @@ AGENT_REGISTRY = {
         "name": "route_agent",
         "prompt": AgentPrompts.ROUTE,
         "tools": [
-            AmapTools.DIRECTION_TRANSIT,
             AmapTools.DIRECTION_WALKING,
             AmapTools.DIRECTION_DRIVING,
-            AmapTools.DIRECTION_BICYCLING,
         ],
         "output_key": "routes",
     },
