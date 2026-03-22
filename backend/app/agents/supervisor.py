@@ -1,4 +1,13 @@
-"""Supervisor 模块 - 智能路由决策中心"""
+"""Supervisor 模块 - 智能路由决策中心
+
+重构后的职责变化：
+- 旧版：既要理解用户意图，又要感知运行时状态，职责混乱
+- 新版：只负责感知运行时状态（数据是否获取成功、是否需要容错）
+        用户意图由 IntentAnalyzer 节点负责，Supervisor 直接读取结果
+
+这个改变让 Supervisor 的每次 LLM 调用都更加聚焦，
+prompt 更短，决策更准确。
+"""
 
 import logging
 from typing import Dict, Any
@@ -7,6 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from .schemas.state import AgentState, RouteDecision
 from .prompts.agents import AgentPrompts
+from .rule_router import smart_router
 
 logger = logging.getLogger(__name__)
 
@@ -30,116 +40,97 @@ class Supervisor:
         )
         self._chain = prompt | supervisor_llm
 
-    async def decide(self, state: AgentState) -> Dict[str, Any]:
-        rid = state.get("request_id", "unknown")
+    def _build_context(self, state: AgentState) -> str:
+        """
+        构建传给 Supervisor 的上下文。
 
-        total_calls = sum(state.get("agent_call_count", {}).values())
-        if total_calls >= MAX_AGENT_CALLS:
-            logger.error(
-                f"[{rid}] Supervisor 达到最大调用次数 ({MAX_AGENT_CALLS})，"
-                f"强制进入 planner_agent，当前 call_count: {state.get('agent_call_count')}"
-            )
-            return {"next": "planner_agent"}
+        关键改变：分为两个清晰的层次：
+        1. 意图层：用户想要什么（直接从 trip_intent 读取，不重复推断）
+        2. 运行时层：执行情况如何（Supervisor 真正需要感知的部分）
 
-        fatal_errors = [e for e in state.get("errors", []) if e.get("fatal")]
-        if fatal_errors:
-            logger.error(
-                f"[{rid}] 检测到致命错误 {fatal_errors}，强制进入 planner_agent"
-            )
-            return {"next": "planner_agent"}
+        这样 Supervisor 的 prompt 更短更聚焦，
+        不再需要从消息历史里猜测用户说了什么。
+        """
+        intent = state.get("trip_intent", {})
 
-        logger.info(f"[{rid}] Supervisor 开始决策，已调用 {total_calls} 次")
+        # ── 意图层：直接读取意图节点的结论 ──────────────────────
+        # Supervisor 不需要知道"用户说了什么"，只需要知道"系统应该做什么"
+        hotel_intent = intent.get("hotel_intent", "unknown")
+        need_hotel = hotel_intent != "skip"  # skip=明确不需要, 其他情况都搜
 
-        city = state.get("city", "未知")
+        intent_summary = (
+            f"需要订酒店: {'是' if need_hotel else '否（用户明确不需要）'} | "
+            f"需要搜景点: {'是' if intent.get('need_attraction_search', True) else '否'} | "
+            f"需要查天气: {'是' if intent.get('need_weather', True) else '否'} | "
+            f"需要规划路线: {'是' if intent.get('need_route', True) else '否'} | "
+            f"已指定景点: {intent.get('given_attractions', [])} | "
+            f"特殊需求: {intent.get('special_requirements', [])}"
+        )
+
+        # ── 运行时层：Supervisor 真正需要感知的 ─────────────────
+        # 这部分是动态变化的，需要实时感知
         has_attractions = len(state.get("attractions", [])) > 0
         has_weather = bool(state.get("weather_info"))
         has_hotels = len(state.get("hotels", [])) > 0
         has_routes = len(state.get("routes", [])) > 0
 
-        context = (
-            f"目的地: {city}, "
-            f"交通: {state.get('transportation', '未知')}, "
-            f"住宿: {state.get('accommodation', '未知')}, "
-            f"出行日期: {state.get('start_date', '未知')} 至 {state.get('end_date', '未知')}, "
-            f"景点已获取: {'是' if has_attractions else '否'}, "
-            f"天气已获取: {'是' if has_weather else '否'}, "
-            f"酒店已获取: {'是' if has_hotels else '否'}, "
-            f"路线已获取: {'是' if has_routes else '否'}, "
-            f"Agent调用统计: {state.get('agent_call_count', {})}"
+        execution_summary = (
+            f"景点数据已获取: {'是' if has_attractions else '否'} | "
+            f"天气数据已获取: {'是' if has_weather else '否'} | "
+            f"酒店数据已获取: {'是' if has_hotels else '否'} | "
+            f"路线数据已获取: {'是' if has_routes else '否'} | "
+            f"已调用统计: {state.get('agent_call_count', {})} | "
+            f"错误数: {len(state.get('errors', []))}"
         )
 
+        return f"【意图层】{intent_summary}\n【运行时层】{execution_summary}"
+
+    async def decide(self, state: AgentState) -> Dict[str, Any]:
+        rid = state.get("request_id", "unknown")
+        
+        # 首先尝试规则路由（零LLM调用）
+        try:
+            result = smart_router(state)
+            
+            if result.get("next") == "planner_agent":
+                return result
+            
+            if result.get("next"):
+                return result
+            
+        except Exception as e:
+            logger.error(f"[{rid}] 规则路由失败: {e}，降级到LLM决策")
+        
+        # 规则路由无法处理，降级到LLM决策
+        logger.info(f"[{rid}] 进入LLM决策模式（降级）")
+        
+        # 构建上下文：意图层 + 运行时层
+        context = self._build_context(state)
+        
+        # 只保留最近的消息作为对话上下文
         MAX_SUPERVISOR_MESSAGES = 3
         recent_messages = state["messages"][-MAX_SUPERVISOR_MESSAGES:]
-
+        
         chain_input = {
             "messages": recent_messages,
             "context": context,
         }
-
+        
         try:
             decision: RouteDecision = await self._chain.ainvoke(chain_input)
-            logger.info(
-                f"[{rid}] 决策结果: {decision.next} | 理由: {decision.reasoning}"
-            )
-
+            logger.info(f"[{rid}] LLM决策结果: {decision.next}")
+            
             if decision.parallel and isinstance(decision.next, list):
                 return {"next": decision.next}
             elif isinstance(decision.next, list):
                 return {"next": decision.next[0]}
             else:
                 return {"next": decision.next}
-
+        
         except Exception as e:
-            logger.error(f"[{rid}] Supervisor 决策失败: {e}，兜底路由到 planner_agent")
+            logger.error(f"[{rid}] LLM决策失败: {e}，兜底到 planner_agent")
             return {"next": "planner_agent"}
 
-        fatal_errors = [e for e in state.get("errors", []) if e.get("fatal")]
-        if fatal_errors:
-            logger.error(
-                f"[{rid}] 检测到致命错误 {fatal_errors}，强制进入 planner_agent"
-            )
-            return {"next": "planner_agent"}
-
-        logger.info(f"[{rid}] Supervisor 开始决策，已调用 {total_calls} 次")
-
-        attractions_status = check_structured_data(state, "attractions")
-        weather_status = check_structured_data(state, "weather_info")
-        hotels_status = check_structured_data(state, "hotels")
-        routes_status = check_structured_data(state, "routes")
-
-        MAX_SUPERVISOR_MESSAGES = 6
-        recent_messages = state["messages"][-MAX_SUPERVISOR_MESSAGES:]
-
-        chain_input = {
-            "messages": recent_messages,
-            "city": state.get("city", "未知"),
-            "transportation": state.get("transportation", "未知"),
-            "accommodation": state.get("accommodation", "未知"),
-            "free_text_input": state.get("free_text_input", "无"),
-            "agent_call_count": state.get("agent_call_count", {}),
-            "agent_results": state.get("agent_results", {}),
-            "attractions_status": attractions_status,
-            "weather_status": weather_status,
-            "hotels_status": hotels_status,
-            "routes_status": routes_status,
-        }
-
-        try:
-            decision: RouteDecision = await self._chain.ainvoke(chain_input)
-            logger.info(
-                f"[{rid}] 决策结果: {decision.next} | 理由: {decision.reasoning}"
-            )
-
-            if decision.parallel and isinstance(decision.next, list):
-                return {"next": decision.next}
-            elif isinstance(decision.next, list):
-                return {"next": decision.next[0]}
-            else:
-                return {"next": decision.next}
-
-        except Exception as e:
-            logger.error(f"[{rid}] Supervisor 决策失败: {e}，兜底路由到 planner_agent")
-            return {"next": "planner_agent"}
 
     def get_node(self):
         async def supervisor_node(state: AgentState) -> Dict[str, Any]:

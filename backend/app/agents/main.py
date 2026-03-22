@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage
 from ..services.llm_service import get_llm
 from ..models.schemas import TripRequest, TripPlan
 from ..services.mcp_tools import initialize_mcp_tools, cleanup_mcp_tools
+from .intent_analyzer import IntentAnalyzer
 from .supervisor import Supervisor
 from .workers import WorkerExecutor as WorkerManager, Planner, get_agent_registry
 from .graph.builder import GraphBuilder
@@ -36,6 +37,7 @@ class MapAgentsSystem:
         self._graph = None
         self._initialized = False
         self._llm = None
+        self._intent_analyzer = None
         self._supervisor = None
         self._worker_manager = None
         self._planner = None
@@ -55,6 +57,9 @@ class MapAgentsSystem:
 
         logger.info("正在初始化 LLM...")
         self._llm = get_llm()
+
+        logger.info("正在初始化 IntentAnalyzer...")
+        self._intent_analyzer = IntentAnalyzer(self._llm)
 
         logger.info("正在初始化 Supervisor...")
         self._supervisor = Supervisor(self._llm)
@@ -79,6 +84,7 @@ class MapAgentsSystem:
         )
 
         builder = GraphBuilder(
+            intent_analyzer_node=self._intent_analyzer.get_node(),
             supervisor_node=self._supervisor.get_node(),
             planner_node=self._planner.get_node(),
             worker_nodes=worker_nodes,
@@ -98,6 +104,7 @@ class MapAgentsSystem:
         await cleanup_mcp_tools()
         self._initialized = False
         self._graph = None
+        self._intent_analyzer = None
         self._supervisor = None
         self._worker_manager = None
         self._planner = None
@@ -129,6 +136,7 @@ class MapAgentsSystem:
             "hotels": [],
             "routes": [],
             "final_plan": {},
+            "trip_intent": {},
         }
 
     def plan_trip(self, request: TripRequest) -> TripPlan:

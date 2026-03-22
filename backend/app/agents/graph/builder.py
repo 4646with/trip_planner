@@ -46,6 +46,7 @@ class GraphBuilder:
 
     def __init__(
         self,
+        intent_analyzer_node: Callable,
         supervisor_node: Callable,
         planner_node: Callable,
         worker_nodes: Dict[str, Callable],
@@ -54,10 +55,12 @@ class GraphBuilder:
         初始化图构建器
 
         Args:
+            intent_analyzer_node: 意图分析节点
             supervisor_node: Supervisor 决策节点
             planner_node: 行程汇总节点
             worker_nodes: Worker 节点字典，key为节点名，value为节点函数
         """
+        self.intent_analyzer_node = intent_analyzer_node
         self.supervisor_node = supervisor_node
         self.planner_node = planner_node
         self.worker_nodes = worker_nodes
@@ -75,7 +78,8 @@ class GraphBuilder:
 
         workflow = StateGraph(AgentState)
 
-        # 添加 Supervisor 和 Planner 节点
+        # 添加意图分析、Supervisor 和 Planner 节点
+        workflow.add_node("intent_analyzer", self.intent_analyzer_node)
         workflow.add_node("supervisor", self.supervisor_node)
         workflow.add_node("planner_agent", self.planner_node)
 
@@ -84,7 +88,7 @@ class GraphBuilder:
             workflow.add_node(name, node_func)
 
         print(
-            f"已添加 {len(self.worker_nodes) + 2} 个节点 (supervisor + planner + {len(self.worker_nodes)} workers)"
+            f"已添加 {len(self.worker_nodes) + 3} 个节点 (intent_analyzer + supervisor + planner + {len(self.worker_nodes)} workers)"
         )
 
         # ✅ 自动生成边：Worker -> Supervisor（所有Worker执行完后都回Supervisor）
@@ -93,13 +97,15 @@ class GraphBuilder:
 
         print(f"已添加 {len(self.worker_nodes)} 条 Worker -> Supervisor 边")
 
-        # ✅ 使用并发路由器处理 Supervisor 的条件边
-        # parallel_router 支持单个节点或多个节点（并发）
+        # ✅ 使用并发路由器处理意图分析节点的条件边
         routing_map = {name: name for name in self.worker_nodes.keys()}
         routing_map["planner_agent"] = "planner_agent"
 
-        workflow.add_conditional_edges("supervisor", parallel_router, routing_map)
+        workflow.add_conditional_edges("intent_analyzer", parallel_router, routing_map)
+        print("已添加 IntentAnalyzer 并发条件边")
 
+        # ✅ 使用并发路由器处理 Supervisor 的条件边
+        workflow.add_conditional_edges("supervisor", parallel_router, routing_map)
         print("已添加 Supervisor 并发条件边")
 
         # Planner -> END
@@ -107,15 +113,15 @@ class GraphBuilder:
 
         print("已添加 Planner -> END 边")
 
-        # 设置入口点
-        workflow.set_entry_point("supervisor")
+        # 设置入口点为意图分析节点
+        workflow.set_entry_point("intent_analyzer")
 
-        print("已设置入口点: supervisor")
+        print("已设置入口点: intent_analyzer")
 
         # 编译图
         self._graph = workflow.compile()
 
-        print("StateGraph 构建完成（支持并发路由）")
+        print("StateGraph 构建完成（支持意图分析 + 并发路由）")
 
         return self._graph
 

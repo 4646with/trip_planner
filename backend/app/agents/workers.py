@@ -467,27 +467,43 @@ class WorkerExecutor:
 # ==========================================
 # Planner 数据清洗工具
 # ==========================================
-def _extract_planner_fields(data: list) -> list:
+def _extract_planner_fields(items: list, max_items: int = 5) -> list:
     """
-    精准提取 Planner 关心的字段，优先体感字段，降级基础字段
-    每类数据最多3条，每字段最多100字
-    """
-    if not isinstance(data, list):
-        return []
+    数据驱动的字段清洗：只保留 Planner 真正需要的字段。
 
-    PREFERRED = ["name", "vibe_summary", "tips", "best_time", "visiting_duration"]
-    FALLBACK = ["name", "address", "description", "visit_duration"]
+    核心思路的转变：
+    旧版是"截断字符串"——先保留所有字段，然后按字符数切断，
+    导致 JSON 可能被截断成无效格式。
+
+    新版是"过滤字段"——按字段名精确控制，确保每个保留的字段都完整，
+    同时大幅减少不必要的数据量（如 photos、poi_id 等 Planner 用不到的字段）。
+
+    这样做的好处是：数据量可控且可预期，不会出现 JSON 截断导致的解析错误。
+    """
+    # Planner 生成行程时真正需要的字段，其他字段是 Worker 内部使用的
+    ESSENTIAL_KEYS = {
+        "name",           # 景点/酒店名称，必须
+        "address",        # 地址，用于地图标注
+        "location",       # 经纬度，用于地图标注
+        "visit_duration", # 建议游览时长，用于时间安排
+        "description",    # 描述，用于生成行程文案
+        "category",       # 类别，用于分类展示
+        "ticket_price",   # 门票价格，用于预算计算
+        "rating",         # 评分，用于质量判断
+        # 酒店专属字段
+        "price_range",    # 价格区间，用于预算计算
+        "distance",       # 距景点距离，用于推荐理由
+    }
 
     cleaned = []
-    for item in data[:3]:
-        if any(item.get(f) for f in PREFERRED):
-            cleaned.append(
-                {k: str(item.get(k, ""))[:100] for k in PREFERRED if item.get(k)}
-            )
-        else:
-            cleaned.append(
-                {k: str(item.get(k, ""))[:100] for k in FALLBACK if item.get(k)}
-            )
+    for item in items[:max_items]:
+        if not isinstance(item, dict):
+            continue
+        # 只保留 Planner 需要的字段，过滤掉 photos、poi_id 等无用字段
+        cleaned_item = {k: v for k, v in item.items() if k in ESSENTIAL_KEYS}
+        if cleaned_item.get("name"):  # 没有名称的数据无意义，跳过
+            cleaned.append(cleaned_item)
+
     return cleaned
 
 
@@ -495,7 +511,13 @@ def _extract_planner_fields(data: list) -> list:
 # Planner 节点
 # ==========================================
 class Planner:
-    """Planner Agent - 基于 schemas.py 中 TripPlan 强类型约束的行程汇总生成器"""
+    """
+    Planner Agent - 行程汇总生成器
+
+    改动：
+    1. 移除二次字符串截断，信任 _extract_planner_fields 的清洗结果
+    2. 将 trip_intent 中的特殊需求注入 prompt，让 Planner 感知约束
+    """
 
     def __init__(self, llm):
         self.structured_llm = llm.with_structured_output(TripPlan)
@@ -503,38 +525,79 @@ class Planner:
     async def generate(self, state: AgentState) -> Dict[str, Any]:
         logger.info("Planner 正在生成最终方案...")
 
-        attractions = state.get("attractions", [])
-        weather_info = state.get("weather_info", [])
-        hotels = state.get("hotels", [])
-        routes = state.get("routes", [])
-
-        logger.info(
-            f"Planner 精准提取数据: attractions={len(attractions)}, weather={len(weather_info)}, hotels={len(hotels)}, routes={len(routes)}"
+        # ── 第一步：数据清洗（字段过滤，不是字符串截断）────────────
+        # 使用数据驱动的清洗，而不是粗暴的字符串截断
+        attractions_context = _extract_planner_fields(
+            state.get("attractions", []), max_items=5
+        )
+        hotels_context = _extract_planner_fields(
+            state.get("hotels", []), max_items=3
+        )
+        weather_context = state.get("weather_info", [])  # 天气数据本身就很小，无需清洗
+        routes_context = _extract_planner_fields(
+            state.get("routes", []), max_items=5
         )
 
+        logger.info(
+            f"Planner 清洗后数据量: "
+            f"attractions={len(attractions_context)}, "
+            f"hotels={len(hotels_context)}, "
+            f"weather={len(weather_context)}, "
+            f"routes={len(routes_context)}"
+        )
+
+        # ── 第二步：从 trip_intent 读取特殊需求 ────────────────────
+        # 这是 Planner 感知"携带老人"、"亲子游"等约束的关键
+        # 不需要 Planner 自己去读消息历史，意图节点已经归纳好了
+        intent = state.get("trip_intent", {})
         accommodation = state.get("accommodation", "未知")
         preferences = state.get("preferences", [])
+        special_requirements = intent.get("special_requirements", [])
+        budget_level = intent.get("budget_level", "unknown")
+        hotel_intent = intent.get("hotel_intent", "unknown")
+
         preferences_str = ", ".join(preferences) if preferences else "无"
+        special_req_str = ", ".join(special_requirements) if special_requirements else "无"
 
-        attractions_context = _extract_planner_fields(attractions)
-        hotels_context = _extract_planner_fields(hotels)
-        weather_context = weather_info[:3]
-        routes_context = routes[:3]
-
+        # ── 第三步：构建 Planner 的输入消息 ────────────────────────
         planner_messages = [
             SystemMessage(content=AgentPrompts.PLANNER),
             HumanMessage(
-                content=f"""【任务上下文】
+                content=f"""
+请根据以下结构化数据生成旅行计划。
+
+【基本信息】
 目标城市: {state.get("city", "未知")}
-旅行日期: {state.get("start_date", "未知")} 至 {state.get("end_date", "未知")}（共 {state.get("travel_days", 0)} 天）
+旅行日期: {state.get("start_date", "未知")} 至 {state.get("end_date", "未知")}
+旅行天数: {state.get("travel_days", 0)}天
+交通方式: {state.get("transportation", "未知")}
 住宿偏好: {accommodation}
 旅行偏好: {preferences_str}
 
-【核心素材】:
-景点详情: {json.dumps(attractions_context, ensure_ascii=False)[:800]}
-酒店详情: {json.dumps(hotels_context, ensure_ascii=False)[:500]}
-天气概况: {json.dumps(weather_context, ensure_ascii=False)[:500]}
-交通建议: {json.dumps(routes_context, ensure_ascii=False)[:500]}"""
+【用户意图（请严格遵守）】
+住宿需求: {
+    "用户明确不需要订酒店，请勿安排酒店费用" if hotel_intent == "skip"
+    else "用户需要订酒店，请根据住宿偏好推荐"
+}
+预算水平: {budget_level}
+特殊需求: {special_req_str}
+{"（注意：有特殊需求，请在行程安排和建议中体现，例如选择无障碍设施、避免长途步行等）" if special_requirements else ""}
+
+【结构化数据（已清洗，字段完整）】
+景点数据:
+{json.dumps(attractions_context, ensure_ascii=False)}
+
+天气数据:
+{json.dumps(weather_context, ensure_ascii=False)}
+
+酒店数据:
+{json.dumps(hotels_context, ensure_ascii=False)}
+
+路线数据:
+{json.dumps(routes_context, ensure_ascii=False)}
+
+请严格遵守输出格式，不要包含任何 markdown 标记。
+"""
             ),
         ]
 
@@ -556,7 +619,6 @@ class Planner:
     def get_node(self):
         async def planner_node(state: AgentState) -> Dict[str, Any]:
             return await self.generate(state)
-
         return planner_node
 
 
