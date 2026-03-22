@@ -280,26 +280,34 @@ class BaseWorker:
 
         print(f"[{self.name}] 正在调用 LLM 和工具...", flush=True)
 
-        city_input = state.get("city", "未知")
-        print(f"[{self.name}] >>>>>>> 原始目的地: {city_input} <<<<<<", flush=True)
+        city = state.get("city", "未知")
+        print(f"[{self.name}] >>>>>>> 目的地: {city} <<<<<<", flush=True)
 
-        safe_state = {
-            "city": city_input,
-            "transportation": state.get("transportation", "未知"),
-            "accommodation": state.get("accommodation", "未知"),
-            "preferences": ", ".join(state.get("preferences", [])) or "无",
-            "free_text_input": state.get("free_text_input", "无"),
-            "start_date": state.get("start_date", "未知"),
-            "end_date": state.get("end_date", "未知"),
-            "travel_days": state.get("travel_days", 0),
-        }
+        # 【KV-Cache优化 + Token剪枝】
+        # 1. System Prompt 保持静态（无变量注入）
+        # 2. 上下文通过 HumanMessage 传递
+        system_msg = SystemMessage(content=self.base_prompt)
 
-        full_prompt = self.base_prompt.format(**safe_state)
+        user_original = state["messages"][0].content if state.get("messages") else "无"
+        has_attractions = len(state.get("attractions", [])) > 0
+        has_hotels = len(state.get("hotels", [])) > 0
+        has_weather = bool(state.get("weather_info"))
 
-        system_msg = SystemMessage(content=full_prompt)
-
-        messages = state.get("messages", [])
-        invoke_state = {"messages": [system_msg] + messages}
+        pruned_messages = [
+            system_msg,
+            HumanMessage(content=f"【用户原始需求】{user_original}"),
+            HumanMessage(
+                content=f"【当前任务上下文】"
+                f"目的地: {city}, "
+                f"交通方式: {state.get('transportation', '未知')}, "
+                f"住宿偏好: {state.get('accommodation', '未知')}, "
+                f"旅行日期: {state.get('start_date', '未知')} 至 {state.get('end_date', '未知')} ({state.get('travel_days', 0)}天), "
+                f"已获取景点: {'是' if has_attractions else '否'}, "
+                f"已获取酒店: {'是' if has_hotels else '否'}, "
+                f"已获取天气: {'是' if has_weather else '否'}"
+            ),
+        ]
+        invoke_state = {"messages": pruned_messages}
 
         response = await self.agent.ainvoke(invoke_state)
         final_text = self._parse_response(response)
