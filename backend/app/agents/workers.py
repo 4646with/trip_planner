@@ -335,6 +335,27 @@ class BaseWorker:
                     + "\n".join(error_lines)
                 )
 
+        agent_specific_context = ""
+        if self.name == "route_agent":
+            attractions = state.get("attractions", [])
+            if attractions:
+                places = []
+                for a in attractions:
+                    name = a.get("name", "未知景点")
+                    loc = (
+                        a.get("location") or f"{a.get('longitude')},{a.get('latitude')}"
+                    )
+                    places.append(f"- {name} (坐标: {loc})")
+                agent_specific_context = (
+                    f"\n【重要路线规划数据】\n"
+                    f"用户已确定的途经景点如下：\n" + "\n".join(places) + "\n"
+                    f"请严格根据以上景点，规划它们之间的合理交通路线。"
+                )
+            else:
+                agent_specific_context = (
+                    "\n【警告】当前还未获取到任何景点数据，请直接返回空路线结果。"
+                )
+
         pruned_messages = [
             system_msg,
             HumanMessage(content=f"【用户原始需求】{user_original}"),
@@ -347,6 +368,7 @@ class BaseWorker:
                 f"已获取景点: {'是' if has_attractions else '否'}, "
                 f"已获取酒店: {'是' if has_hotels else '否'}, "
                 f"已获取天气: {'是' if has_weather else '否'}"
+                f"{agent_specific_context}"
                 f"{retry_context}"
             ),
         ]
@@ -384,11 +406,11 @@ class BaseWorker:
 class WorkerExecutor:
     """动态 Worker 执行器 - 高扩展性与高并发设计"""
 
-    def __init__(self, llm, max_concurrency: int = 5):
+    def __init__(self, llm, max_concurrency: int = 15):
         """
         max_concurrency: 最大并发数
         - Gemini 免费版 RPM 5，建议 1-2
-        - 智谱AI，建议 5-10
+        - 智谱AI，建议 10-15
         """
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._manager = AgentFactory(llm)

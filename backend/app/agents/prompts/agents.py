@@ -29,9 +29,14 @@ class AgentPrompts:
 请按以下JSON格式输出决策：
 {{"next": "agent_name", "parallel": false, "reasoning": "决策理由"}}
 
+【并发与依赖控制强制规则 - 最高优先级】
+1. 第一梯队（基础信息）：若景点数据未获取，只能派发 attraction_agent + weather_agent
+2. 第二梯队（强依赖信息）：绝对禁止在景点数据获取前启动 route_agent 或 hotel_agent
+3. 触发条件：只有在 attractions 已明确包含具体景点列表后，才能派发 route_agent 和 hotel_agent
+
 示例：
-- 首次并行获取: {{"next": ["attraction_agent", "weather_agent", "hotel_agent"], "parallel": true, "reasoning": "目的地已确定"}}
-- 依赖串行: {{"next": "route_agent", "parallel": false, "reasoning": "景点已获取"}}
+- 首次并行: {{"next": ["attraction_agent", "weather_agent"], "parallel": true, "reasoning": "景点数据未获取，先获取基础信息"}}
+- 第二批并行: {{"next": ["hotel_agent", "route_agent"], "parallel": true, "reasoning": "景点已获取，可并发获取酒店和路线"}}
 - 汇总: {{"next": "planner_agent", "parallel": false, "reasoning": "所有数据已收集完毕"}}
 """
 
