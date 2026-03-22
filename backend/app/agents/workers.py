@@ -27,6 +27,29 @@ logger = logging.getLogger(__name__)
 
 
 # ==========================================
+# 重试引导 - 错误类型提示映射表
+# ==========================================
+RETRY_ERROR_HINTS = {
+    "parse_failed": "确保返回纯JSON格式，不要有其他文字",
+    "empty_result": "尝试扩大搜索范围或使用替代关键词",
+    "tool_failed": "换一种方式调用工具或调整搜索关键词",
+    "default": "分析失败原因，调整搜索策略后重试",
+}
+
+
+def _classify_error(error_msg: str) -> str:
+    """根据错误信息分类，返回提示类型"""
+    msg_lower = error_msg.lower()
+    if "json" in msg_lower or "解析" in error_msg or "parse" in msg_lower:
+        return "parse_failed"
+    elif "空" in error_msg or "empty" in msg_lower or "no result" in msg_lower:
+        return "empty_result"
+    elif "tool" in msg_lower or "工具" in error_msg or "api" in msg_lower:
+        return "tool_failed"
+    return "default"
+
+
+# ==========================================
 # web_search 体感型包装器 - 自动补全后缀
 # ==========================================
 _WEB_SEARCH_SUFFIXES = {
@@ -293,6 +316,23 @@ class BaseWorker:
         has_hotels = len(state.get("hotels", [])) > 0
         has_weather = bool(state.get("weather_info"))
 
+        call_count = state.get("agent_call_count", {}).get(self.name, 0)
+        retry_context = ""
+        if call_count > 0:
+            my_errors = [e for e in state.get("errors", []) if e.get("agent") == self.name]
+            recent_errors = my_errors[-3:] if len(my_errors) >= 3 else my_errors
+            if recent_errors:
+                error_lines = []
+                for e in recent_errors:
+                    err_msg = e.get("error", "")[:200]
+                    hint_key = _classify_error(err_msg)
+                    error_lines.append(f"- ❌ {err_msg} → {RETRY_ERROR_HINTS[hint_key]}")
+                retry_context = (
+                    f"\n【重试说明 - 第{call_count + 1}次尝试】\n"
+                    + "之前执行失败记录：\n"
+                    + "\n".join(error_lines)
+                )
+
         pruned_messages = [
             system_msg,
             HumanMessage(content=f"【用户原始需求】{user_original}"),
@@ -305,6 +345,7 @@ class BaseWorker:
                 f"已获取景点: {'是' if has_attractions else '否'}, "
                 f"已获取酒店: {'是' if has_hotels else '否'}, "
                 f"已获取天气: {'是' if has_weather else '否'}"
+                f"{retry_context}"
             ),
         ]
         invoke_state = {"messages": pruned_messages}
