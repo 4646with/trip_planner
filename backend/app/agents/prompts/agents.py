@@ -27,16 +27,12 @@ class AgentPrompts:
 - 已获取的数据不需要重新获取
 
 请按以下JSON格式输出决策：
-{
-  "next": "agent_name",  // 单个节点名，或 ["agent1", "agent2"] 列表
-  "parallel": false,      // 是否并发执行，true或false
-  "reasoning": "决策理由"
-}
+{{"next": "agent_name", "parallel": false, "reasoning": "决策理由"}}
 
 示例：
-- 首次并行获取: {"next": ["attraction_agent", "weather_agent", "hotel_agent"], "parallel": true, "reasoning": "目的地已确定，三个数据源无依赖，必须并发获取"}
-- 依赖串行: {"next": "route_agent", "parallel": false, "reasoning": "景点数据已获取，现在可以规划路线"}
-- 汇总: {"next": "planner_agent", "parallel": false, "reasoning": "所有数据已收集完毕"}
+- 首次并行获取: {{"next": ["attraction_agent", "weather_agent", "hotel_agent"], "parallel": true, "reasoning": "目的地已确定"}}
+- 依赖串行: {{"next": "route_agent", "parallel": false, "reasoning": "景点已获取"}}
+- 汇总: {{"next": "planner_agent", "parallel": false, "reasoning": "所有数据已收集完毕"}}
 """
 
     # ========== Attraction Agent 提示词 ==========
