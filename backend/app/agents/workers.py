@@ -1,33 +1,31 @@
-"""Workers 模块 - 配置化驱动 + 动态注册版
-核心改进：
-1. AGENT_REGISTRY: 配置化驱动，新增 Agent 只需填表
-2. 动态注册: 自动实例化所有注册表中的 Worker
-3. 结构化输出: 所有 Agent 返回结构化 JSON 数据
+"""Workers 模块 - 纯函数流水线版
+
+重构特性：
+1. 彻底移除面向对象基类和注册表
+2. 单次 Tool Calling，0 循环
+3. 保留重试机制、上下文组装与体感搜索增强
 """
 
 import asyncio
 import json
 import logging
+import re as regex_module
 from functools import wraps
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, List
 
-from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
-from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel
 
 from .schemas.state import AgentState
-from .schemas.agent_output import AttractionData, WeatherData, HotelData, RouteData
-from .prompts.agents import AgentPrompts
 from ..services.mcp_tools import get_mcp_manager, AmapTools
 from .tools import web_search as original_web_search
+from ..services.llm_service import get_llm
 
 logger = logging.getLogger(__name__)
 
+llm = get_llm()
 
-
-# ==========================================
-# web_search 体感型包装器 - 自动补全后缀
-# ==========================================
 _WEB_SEARCH_SUFFIXES = {
     "attraction": " 真实体验 避坑 拍照点位 游玩时长",
     "hotel": " 必吃榜 真实评价 排队情况 适合拍照吗",
@@ -35,7 +33,7 @@ _WEB_SEARCH_SUFFIXES = {
 
 
 def create_enhanced_web_search(agent_type: str) -> StructuredTool:
-    """创建增强版 web_search 工具，自动补全体感类后缀"""
+    """保留：增强版 web_search 工具，自动补全体感类后缀"""
     suffix = _WEB_SEARCH_SUFFIXES.get(agent_type, "")
 
     async def enhanced_web_search(query: str) -> str:
@@ -48,8 +46,6 @@ def create_enhanced_web_search(agent_type: str) -> StructuredTool:
         except Exception as e:
             logger.error(f"[web_search] 失败: {e}")
             return ""
-
-    from pydantic import BaseModel
 
     enhanced_schema = type(
         "EnhancedWebSearchInput",
@@ -66,507 +62,215 @@ def create_enhanced_web_search(agent_type: str) -> StructuredTool:
     )
 
 
-# ==========================================
-# Agent 注册表 - 新增 Agent 只需在此配置
-# ==========================================
-def build_route_context(worker: "BaseWorker", state: AgentState) -> str:
-    """route_agent 专用上下文构建器"""
-    attractions = state.get("attractions", [])
-    if not attractions:
-        return "\n【警告】当前还未获取到任何景点数据，请直接返回空路线结果。"
-
-    places = []
-    for a in attractions:
-        name = a.get("name", "未知景点")
-        lon = a.get("longitude") or (a.get("location") or {}).get("longitude")
-        lat = a.get("latitude") or (a.get("location") or {}).get("latitude")
-
-        if lon and lat:
-            places.append(
-                f"- {name}：坐标 {lon},{lat}（调用工具时origin/destination必须用此坐标）"
-            )
-        else:
-            logger.warning(f"[route_agent] 景点 {name} 缺少坐标，跳过路线规划")
-
-    if places:
-        return (
-            f"\n【重要路线规划数据】\n"
-            f"以下是景点的精确坐标，调用 maps_direction_walking 等工具时，\n"
-            f"origin 和 destination 参数必须使用'经度,纬度'格式的数字坐标，\n"
-            f"绝对不能使用景点名称或地址文字：\n" + "\n".join(places)
-        )
-    else:
-        return "\n【警告】景点数据缺少坐标信息，无法进行路线规划，请返回空路线。"
-
-
-AGENT_REGISTRY = {
-    "attraction": {
-        "name": "attraction_agent",
-        "prompt": AgentPrompts.ATTRACTION,
-        "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL],
-        "output_key": "attractions",
-        "use_enhanced_web_search": True,
-        "validator": lambda item: AttractionData(**item).model_dump(),
-    },
-    "weather": {
-        "name": "weather_agent",
-        "prompt": AgentPrompts.WEATHER,
-        "tools": [AmapTools.WEATHER],
-        "output_key": "weather_info",
-        "validator": lambda item: WeatherData(**item).model_dump(),
-    },
-    "hotel": {
-        "name": "hotel_agent",
-        "prompt": AgentPrompts.HOTEL,
-        "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL],
-        "output_key": "hotels",
-        "use_enhanced_web_search": True,
-        "validator": lambda item: HotelData(**item).model_dump(),
-    },
-    "route": {
-        "name": "route_agent",
-        "prompt": AgentPrompts.ROUTE,
-        "tools": [
-            AmapTools.DIRECTION_WALKING,
-            AmapTools.DIRECTION_DRIVING,
-        ],
-        "output_key": "routes",
-        "validator": lambda item: RouteData(**item).model_dump(),
-        "context_builder": build_route_context,
-    },
-}
-
-
 def with_retry_and_log(func):
-    """统一的异常处理和日志装饰器，支持 Gemini 429 流重试"""
-    import re as regex_module
+    """保留：统一的异常处理和日志装饰器（去除了 self 依赖）"""
 
     @wraps(func)
-    async def wrapper(self, state: AgentState, *args, **kwargs):
-        agent_name = self.name
-        print(f"[{agent_name}] 开始执行...")
+    async def wrapper(state: AgentState, *args, **kwargs):
+        agent_name = func.__name__.replace("_node", "")
+        logger.info(f"[{agent_name}] 开始执行...")
 
-        max_retries = 1  # 仅允许1次重试，避免阻塞信号量
-        last_error = None
-
+        max_retries = 1
         for attempt in range(1, max_retries + 1):
             try:
-                result = await func(self, state, *args, **kwargs)
-                print(f"[{agent_name}] 执行成功")
+                result = await func(state, *args, **kwargs)
+                logger.info(f"[{agent_name}] 执行成功")
                 return result
             except Exception as e:
                 error_str = str(e)
-                last_error = e
-
-                # 检查是否是 429 限流错误 - 仅限流重试
                 if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
                     wait_match = regex_module.search(r"retry in ([\d.]+)s", error_str)
-                    if wait_match:
-                        wait_time = float(wait_match.group(1)) + 1
-                        print(
-                            f"[{agent_name}] 触发限流，等待 {wait_time:.1f}s (尝试 {attempt}/{max_retries})"
-                        )
-                        await asyncio.sleep(wait_time)
-                        # 继续重试
-                    else:
-                        print(f"[{agent_name}] 429 限流，等待 10s")
-                        await asyncio.sleep(10)
-                        # 继续重试
+                    wait_time = float(wait_match.group(1)) + 1 if wait_match else 10.0
+                    logger.warning(
+                        f"[{agent_name}] 触发限流，等待 {wait_time:.1f}s (尝试 {attempt}/{max_retries})"
+                    )
+                    await asyncio.sleep(wait_time)
                 else:
-                    # 其他错误不重试，直接失败
-                    print(f"[{agent_name}] 执行失败: {error_str[:200]}")
-                    import traceback
+                    logger.error(f"[{agent_name}] 执行失败: {error_str[:200]}")
+                    break
 
-                    traceback.print_exc()
-                    return {
-                        "messages": state.get("messages", []),
-                        self.output_key: [],
-                        "agent_results": self._update_agent_results(
-                            state, success=False
-                        ),
-                    }
-
-        # 重试次数用尽，返回失败
-        print(f"[{agent_name}] 重试次数用尽，执行失败")
-        if last_error:
-            import traceback
-
-            traceback.print_exc()
+        output_key = "weather_info" if "weather" in agent_name else f"{agent_name}s"
         return {
-            "messages": state.get("messages", []),
-            self.output_key: [],
-            "agent_results": self._update_agent_results(state, success=False),
+            output_key: [],
+            "agent_call_count": {
+                **state.get("agent_call_count", {}),
+                f"{agent_name}_agent": 1,
+            },
+            "errors": [
+                {
+                    "agent": f"{agent_name}_agent",
+                    "error": f"执行失败: {str(e)}",
+                    "fatal": False,
+                }
+            ],
         }
 
     return wrapper
 
 
-class AgentFactory:
-    """Worker Agent 管理器 - 极简版"""
+def build_worker_context(
+    state: AgentState, worker_type: str, include_intent: bool = True
+) -> str:
+    """保留：提取后的极简上下文构造器"""
+    city = state.get("city", "未知")
+    days = state.get("travel_days", 1)
+    context = f"目的地: {city}，旅行时长: {days}天。\n"
 
-    def __init__(self, llm):
-        self.llm = llm
-        self._agent_cache: Dict[str, Any] = {}
-
-    def _build_cache_key(self, name: str, tools: List[BaseTool]) -> str:
-        tool_names = tuple(sorted(t.name for t in tools))
-        return f"{name}:{tool_names}"
-
-    def get_or_create_agent(self, name: str, tools: List[BaseTool]) -> Any:
-        key = self._build_cache_key(name, tools)
-
-        if key in self._agent_cache:
-            return self._agent_cache[key]
-
-        logger.info(f"[{name}] 创建新 Agent 实例")
-        agent = create_react_agent(model=self.llm, tools=tools)
-        self._agent_cache[key] = agent
-        return agent
-
-
-def _safe_extract_json(text: str) -> dict:
-    """稳定 JSON 提取（避免 regex 贪婪问题）"""
-    stack = []
-    start = None
-
-    for i, c in enumerate(text):
-        if c == "{":
-            if not stack:
-                start = i
-            stack.append(c)
-        elif c == "}":
-            if stack:
-                stack.pop()
-                if not stack and start is not None:
-                    try:
-                        return json.loads(text[start : i + 1])
-                    except Exception:
-                        return {}
-
-    return {}
-
-
-def parse_agent_output(text: str) -> dict:
-    data = _safe_extract_json(text)
-
-    if not isinstance(data, dict):
-        return {}
-
-    for key in ["attractions", "weather_info", "hotels", "routes"]:
-        if key in data and not isinstance(data[key], list):
-            data[key] = [data[key]] if data[key] else []
-
-    return data
-
-
-class BaseWorker:
-    """Worker 基类 - 纯粹流水线模式"""
-
-    def __init__(
-        self,
-        manager: AgentFactory,
-        name: str,
-        base_prompt: str,
-        tools: List[BaseTool],
-        output_key: str,
-        config: Optional[Dict[str, Any]] = None,
-    ):
-        self.name = name
-        self.base_prompt = base_prompt
-        self.output_key = output_key
-        self.config = config or {}
-        self.validator = self.config.get("validator")
-        self.agent = manager.get_or_create_agent(name, tools)
-
-    def _parse_response(self, response: dict) -> str:
-        messages = response.get("messages", [])
-        if messages:
-            last_msg = messages[-1]
-            return last_msg.content if hasattr(last_msg, "content") else str(last_msg)
-        return ""
-
-    def _update_agent_results(self, state: AgentState, success: bool = True) -> dict:
-        agent_results = state.get("agent_results", {}).copy()
-        agent_results[self.name] = {
-            "called": True,
-            "success": success,
-        }
-        return agent_results
-
-    def _update_call_count(self, state: AgentState) -> dict:
-        counts = state.get("agent_call_count", {}).copy()
-        counts[self.name] = counts.get(self.name, 0) + 1
-        return counts
-
-    @with_retry_and_log
-    async def execute(self, state: AgentState) -> Dict[str, Any]:
-        print(f"[{self.name}] 正在调用 LLM 和工具...", flush=True)
-
-        city = state.get("city", "未知")
-        print(f"[{self.name}] >>>>>>> 目的地: {city} <<<<<<", flush=True)
-
-        pruned_messages = self._build_messages(state)
-        response = await self.agent.ainvoke({"messages": pruned_messages})
-
-        attractions = state.get("attractions", [])
-        parsed = self._parse_and_validate(response, attractions)
-
-        has_data = bool(parsed.get(self.output_key, []))
-
-        print(f"[{self.name}] 解析结果: has_data={has_data}", flush=True)
-        print(
-            f"[{self.name}] 数据预览: {str(parsed.get(self.output_key, []))[:200]}...",
-            flush=True,
-        )
-
-        return self._build_result(response, parsed, state, has_data)
-
-    def _build_messages(self, state: AgentState) -> List[BaseMessage]:
-        """构建输入消息"""
-        system_msg = SystemMessage(content=self.base_prompt)
-        user_original = state["messages"][0].content if state.get("messages") else "无"
-        context = self._build_context(state)
-        retry_context = self._build_retry_context(state)
-        execution_directive = self._build_execution_directive(state)
-
-        messages = [
-            system_msg,
-            HumanMessage(content=f"【用户原始需求】{user_original}"),
-            HumanMessage(content=f"【当前任务上下文】{context}{retry_context}"),
-        ]
-
-        if execution_directive:
-            messages.append(HumanMessage(content=execution_directive))
-
-        return messages
-
-    def _build_execution_directive(self, state: AgentState) -> Optional[str]:
-        """
-        根据 trip_intent 中的 pre_selected 字段，
-        生成'执行模式'指令，覆盖默认的'推荐模式'行为。
-
-        返回 None 表示走默认推荐模式。
-        """
+    if include_intent:
         intent = state.get("trip_intent", {})
+        context += f"预算级别: {intent.get('budget_level', '未指定')}。\n"
+        if tactical := intent.get("tactical_instructions", {}).get(worker_type):
+            context += f"【🚨 战术约束】: {tactical}\n"
+    return context
 
-        if self.name == "hotel_agent":
-            pre_selected = intent.get("pre_selected_hotel")
-            if pre_selected:
-                return (
-                    f"⚠️【执行模式 - 最高优先级】\n"
-                    f"用户已明确指定酒店：「{pre_selected}」\n"
-                    f"你的任务不是推荐，而是执行：\n"
-                    f"1. 调用 maps_text_search，keywords='{pre_selected}', city=目标城市\n"
-                    f"2. 取第一个结果的坐标、地址\n"
-                    f"3. 直接输出该酒店信息，不要推荐其他酒店\n"
-                    f"禁止：搜索其他酒店、给出替代方案、提及其他品牌"
-                )
 
-        elif self.name == "attraction_agent":
-            pre_selected = intent.get("pre_selected_attractions", [])
-            if pre_selected:
-                names = "、".join(pre_selected)
-                return (
-                    f"⚠️【混合模式 - 最高优先级】\n"
-                    f"用户已锁定景点：{names}\n"
-                    f"你的任务：\n"
-                    f"1. 先调用 maps_text_search 逐一获取这些景点的坐标和详情\n"
-                    f"2. 如果行程天数 > 锁定的景点数量，可以补充推荐其他景点\n"
-                    f"3. 优先推荐与锁定景点在同一区域的选择\n"
-                    f"禁止：替换用户锁定的景点"
-                )
+def _safe_parse_json(raw_str: str) -> list:
+    """辅助函数：处理大模型偶尔返回的字符串包裹的 JSON"""
+    if isinstance(raw_str, str):
+        try:
+            parsed = json.loads(raw_str)
+            return parsed if isinstance(parsed, list) else [parsed]
+        except:
+            return []
+    return raw_str if isinstance(raw_str, list) else [raw_str]
 
-        elif self.name == "restaurant_agent":
-            pre_selected = intent.get("pre_selected_restaurants", [])
-            if pre_selected:
-                names = "、".join(pre_selected)
-                return (
-                    f"⚠️【混合模式 - 最高优先级】\n"
-                    f"用户已指定餐厅：{names}\n"
-                    f"你的任务：\n"
-                    f"1. 先调用 maps_text_search 逐一获取这些餐厅的坐标、地址和评价\n"
-                    f"2. 如果需要，可补充推荐其他餐厅\n"
-                    f"禁止：替换用户指定的餐厅"
-                )
 
-        return None
-
-    def _build_context(self, state: AgentState) -> str:
-        """构建任务上下文"""
-        city = state.get("city", "未知")
-        has_attractions = len(state.get("attractions", [])) > 0
-        has_hotels = len(state.get("hotels", [])) > 0
-        has_weather = bool(state.get("weather_info"))
-
-        context = (
-            f"目的地: {city}, "
-            f"交通方式: {state.get('transportation', '未知')}, "
-            f"住宿偏好: {state.get('accommodation', '未知')}, "
-            f"旅行日期: {state.get('start_date', '未知')} 至 {state.get('end_date', '未知')} ({state.get('travel_days', 0)}天), "
-            f"已获取景点: {'是' if has_attractions else '否'}, "
-            f"已获取酒店: {'是' if has_hotels else '否'}, "
-            f"已获取天气: {'是' if has_weather else '否'}"
+@with_retry_and_log
+async def hotel_agent_node(state: AgentState) -> Dict[str, Any]:
+    """酒店智能体"""
+    tools = list(
+        get_mcp_manager().get_tools_by_names(
+            [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL]
         )
+    )
+    tools.append(create_enhanced_web_search("hotel"))
+    llm_with_tools = llm.bind_tools(tools)
 
-        context_builder = self.config.get("context_builder")
-        if context_builder:
-            context += context_builder(self, state)
+    sys_msg = SystemMessage(
+        "你是一个专业的酒店检索助手。请严格根据上下文约束调用工具，获取酒店信息。"
+    )
+    human_msg = HumanMessage(build_worker_context(state, "hotel"))
 
-        return context
+    ai_msg = await llm_with_tools.ainvoke([sys_msg, human_msg])
 
-    def _build_retry_context(self, state: AgentState) -> str:
-        """构建重试上下文"""
-        call_count = state.get("agent_call_count", {}).get(self.name, 0)
-        if call_count == 0:
-            return ""
+    results = []
+    if ai_msg.tool_calls:
+        tool_call = ai_msg.tool_calls[0]
+        tool_func = next((t for t in tools if t.name == tool_call["name"]), tools[0])
+        raw_res = await tool_func.ainvoke(tool_call["args"])
+        results = _safe_parse_json(raw_res)
 
-        my_errors = [e for e in state.get("errors", []) if e.get("agent") == self.name]
-        recent_errors = my_errors[-3:] if len(my_errors) >= 3 else my_errors
+    return {
+        "hotels": results,
+        "agent_call_count": {**state.get("agent_call_count", {}), "hotel_agent": 1},
+    }
 
-        if not recent_errors:
-            return ""
 
-        error_lines = []
-        for e in recent_errors:
-            err_msg = e.get("error", "")[:200]
-            error_lines.append(f"- ❌ {err_msg}")
-
-        return (
-            f"\n【重试说明 - 第{call_count + 1}次尝试】\n"
-            + "之前执行失败记录：\n"
-            + "\n".join(error_lines)
+@with_retry_and_log
+async def attraction_agent_node(state: AgentState) -> Dict[str, Any]:
+    """景点智能体"""
+    tools = list(
+        get_mcp_manager().get_tools_by_names(
+            [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL]
         )
+    )
+    tools.append(create_enhanced_web_search("attraction"))
+    llm_with_tools = llm.bind_tools(tools)
 
-    def _parse_and_validate(self, response: dict, attractions: list) -> dict:
-        """解析响应并验证"""
-        final_text = self._parse_response(response)
+    sys_msg = SystemMessage(
+        "你是一个专业的景点检索助手。请根据上下文约束调用工具搜索景点。"
+    )
+    human_msg = HumanMessage(build_worker_context(state, "attraction"))
 
-        if not final_text:
-            logger.warning(f"[{self.name}] 空响应")
-            return {}
+    ai_msg = await llm_with_tools.ainvoke([sys_msg, human_msg])
 
-        parsed = parse_agent_output(final_text)
+    results = []
+    if ai_msg.tool_calls:
+        tool_call = ai_msg.tool_calls[0]
+        tool_func = next((t for t in tools if t.name == tool_call["name"]), tools[0])
+        raw_res = await tool_func.ainvoke(tool_call["args"])
+        results = _safe_parse_json(raw_res)
 
-        if self.name == "route_agent":
-            valid_names = {a.get("name", "") for a in attractions if a.get("name")}
-            routes = parsed.get(self.output_key, [])
-            valid_routes = [
-                r
-                for r in routes
-                if r.get("origin") in valid_names
-                and r.get("destination") in valid_names
-            ]
-            if len(valid_routes) < len(routes):
-                print(
-                    f"[{self.name}] 过滤幻觉路线: {len(routes) - len(valid_routes)} 条",
-                    flush=True,
-                )
-            parsed[self.output_key] = valid_routes
+    return {
+        "attractions": results,
+        "agent_call_count": {
+            **state.get("agent_call_count", {}),
+            "attraction_agent": 1,
+        },
+    }
 
-        if self.validator:
-            output_key = self.output_key
-            items = parsed.get(output_key, [])
-            if isinstance(items, list):
-                validated_items = []
-                for item in items:
-                    if isinstance(item, dict):
-                        try:
-                            validated = self.validator(item)
-                            validated_items.append(validated)
-                        except Exception as e:
-                            logger.warning(f"[{self.name}] validator 失败: {e}")
-                    else:
-                        validated_items.append(item)
-                parsed[output_key] = validated_items
 
-        return parsed
+@with_retry_and_log
+async def weather_agent_node(state: AgentState) -> Dict[str, Any]:
+    """天气智能体"""
+    tools = list(get_mcp_manager().get_tools_by_names([AmapTools.WEATHER]))
+    llm_with_tools = llm.bind_tools(tools)
 
-    def _build_result(
-        self, response: dict, parsed: dict, state: AgentState, has_data: bool
-    ) -> Dict[str, Any]:
-        """构建返回字典"""
-        agent_results = self._update_agent_results(state, success=has_data)
-        call_count = self._update_call_count(state)
+    sys_msg = SystemMessage("你是一个天气查询助手。请调用工具查询目的地天气。")
+    human_msg = HumanMessage(
+        build_worker_context(state, "weather", include_intent=False)
+    )
 
-        result_data = parsed.get(self.output_key, [])
-        if not isinstance(result_data, list):
-            result_data = []
+    ai_msg = await llm_with_tools.ainvoke([sys_msg, human_msg])
 
+    results = []
+    if ai_msg.tool_calls:
+        raw_res = await tools[0].ainvoke(ai_msg.tool_calls[0]["args"])
+        results = _safe_parse_json(raw_res)
+
+    return {
+        "weather_info": results,
+        "agent_call_count": {**state.get("agent_call_count", {}), "weather_agent": 1},
+    }
+
+
+@with_retry_and_log
+async def route_agent_node(state: AgentState) -> Dict[str, Any]:
+    """路线智能体"""
+    attractions = state.get("attractions", [])
+    if not attractions:
         return {
-            "messages": response.get("messages", []),
-            self.output_key: result_data,
-            "agent_results": agent_results,
-            "agent_call_count": call_count,
+            "routes": [],
+            "agent_call_count": {**state.get("agent_call_count", {}), "route_agent": 1},
         }
 
+    locations = [
+        f"{a.get('name', '未知')} ({a.get('location', '位置未知')})"
+        for a in attractions[:4]
+    ]
+    points_str = " -> ".join(locations)
 
-class WorkerExecutor:
-    """动态 Worker 执行器 - 高扩展性与高并发设计"""
-
-    def __init__(self, llm, max_concurrency: int = 15):
-        """
-        max_concurrency: 最大并发数
-    
-        """
-        self._semaphore = asyncio.Semaphore(max_concurrency)
-        self._manager = AgentFactory(llm)
-        self._workers: Dict[str, BaseWorker] = {}
-
-        print(f"[WorkerExecutor] 初始化完成，并发限制: {max_concurrency}")
-
-        for agent_id, config in AGENT_REGISTRY.items():
-            tools = list(get_mcp_manager().get_tools_by_names(config["tools"]))
-
-            if config.get("use_enhanced_web_search", False):
-                enhanced_search = create_enhanced_web_search(agent_id)
-                tools.append(enhanced_search)
-                logger.info(f"[{agent_id}] 已注入增强版 web_search 工具")
-
-            self._workers[agent_id] = BaseWorker(
-                manager=self._manager,
-                name=config["name"],
-                base_prompt=config["prompt"],
-                tools=tools,
-                output_key=config["output_key"],
-                config=config,
-            )
-
-        logger.info(
-            f"WorkerExecutor 初始化完成，动态加载了 {len(self._workers)} 个 Worker: {list(AGENT_REGISTRY.keys())}"
+    tools = list(
+        get_mcp_manager().get_tools_by_names(
+            [AmapTools.DIRECTION_WALKING, AmapTools.DIRECTION_DRIVING]
         )
+    )
+    llm_with_tools = llm.bind_tools(tools)
 
-    def get_node_func(self, agent_id: str):
-        """动态生成 LangGraph 节点闭包函数"""
-        if agent_id not in self._workers:
-            raise ValueError(f"未知的 Agent ID: {agent_id}")
+    sys_msg = SystemMessage(
+        "你是一个交通路线规划助手。请调用工具查询以下途经点序列的路线。"
+    )
+    context_str = build_worker_context(state, "route", include_intent=False)
+    human_msg = HumanMessage(f"{context_str}\n【需规划的途经点序列】: {points_str}")
 
-        worker_instance = self._workers[agent_id]
+    ai_msg = await llm_with_tools.ainvoke([sys_msg, human_msg])
 
-        async def dynamic_node(state: AgentState) -> Dict[str, Any]:
-            async with self._semaphore:
-                try:
-                    return await worker_instance.execute(state)
-                except Exception as e:
-                    logger.error(f"[{worker_instance.name}] 崩溃: {e}")
-                    return {
-                        "messages": state.get("messages", []),
-                        worker_instance.output_key: [],
-                        "agent_results": {},
-                        "agent_call_count": state.get("agent_call_count", {}),
-                    }
+    results = []
+    if ai_msg.tool_calls:
+        tool_call = ai_msg.tool_calls[0]
+        tool_func = next((t for t in tools if t.name == tool_call["name"]), tools[0])
+        raw_res = await tool_func.ainvoke(tool_call["args"])
+        results = _safe_parse_json(raw_res)
 
-        return dynamic_node
-
-
-def get_agent_registry():
-    return AGENT_REGISTRY
+    return {
+        "routes": results,
+        "agent_call_count": {**state.get("agent_call_count", {}), "route_agent": 1},
+    }
 
 
-def get_worker_keys():
-    """获取所有 Worker Agent 的 key（用于 get_node_func）"""
-    return list(AGENT_REGISTRY.keys())
-
-
-def get_worker_names():
-    """获取所有 Worker Agent 的 name（用于节点命名）"""
-    return [config["name"] for config in AGENT_REGISTRY.values()]
+WORKER_NODES = {
+    "hotel_agent": hotel_agent_node,
+    "attraction_agent": attraction_agent_node,
+    "weather_agent": weather_agent_node,
+    "route_agent": route_agent_node,
+}

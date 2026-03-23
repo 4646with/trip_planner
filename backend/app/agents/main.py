@@ -15,11 +15,7 @@ from langchain_core.messages import HumanMessage
 from ..services.llm_service import get_llm
 from ..models.schemas import TripRequest, TripPlan
 from ..services.mcp_tools import initialize_mcp_tools, cleanup_mcp_tools
-from .intent_analyzer import IntentAnalyzer
-from .supervisor import Supervisor
-from .workers import WorkerExecutor as WorkerManager, get_agent_registry
-from .planner import Planner
-from .graph.builder import GraphBuilder
+from .graph.builder import build_trip_graph
 from .utils.parsers import parse_and_build_plan_async
 
 logger = logging.getLogger(__name__)
@@ -37,17 +33,9 @@ class MapAgentsSystem:
         self._graph = None
         self._initialized = False
         self._llm = None
-        self._intent_analyzer = None
-        self._supervisor = None
-        self._worker_manager = None
-        self._planner = None
 
     async def initialize(self) -> None:
-        """
-        初始化 MCP 工具与大模型
-
-        必须在首次使用系统前调用
-        """
+        """初始化 MCP 工具与大模型"""
         if self._initialized:
             logger.info("系统已初始化，跳过")
             return
@@ -58,38 +46,8 @@ class MapAgentsSystem:
         logger.info("正在初始化 LLM...")
         self._llm = get_llm()
 
-        logger.info("正在初始化 IntentAnalyzer...")
-        self._intent_analyzer = IntentAnalyzer(self._llm)
-
-        logger.info("正在初始化 Supervisor...")
-        self._supervisor = Supervisor(self._llm)
-
-        logger.info("正在初始化 Workers...")
-        self._worker_manager = WorkerManager(self._llm)
-
-        logger.info("正在初始化 Planner...")
-        self._planner = Planner(self._llm)
-
         logger.info("正在构建 StateGraph...")
-
-        # ✅ 动态获取所有 Worker 节点（使用 name 作为节点名）
-        registry = get_agent_registry()
-        worker_nodes = {}
-        for agent_key, config in registry.items():
-            node_name = config["name"]  # 如 "attraction_agent"
-            worker_nodes[node_name] = self._worker_manager.get_node_func(agent_key)
-
-        logger.info(
-            f"已发现 {len(worker_nodes)} 个 Worker: {list(worker_nodes.keys())}"
-        )
-
-        builder = GraphBuilder(
-            intent_analyzer_node=self._intent_analyzer.get_node(),
-            supervisor_node=self._supervisor.get_node(),
-            planner_node=self._planner.get_node(),
-            worker_nodes=worker_nodes,
-        )
-        self._graph = builder.build()
+        self._graph = build_trip_graph(self._llm)
 
         self._initialized = True
         logger.info("✅ 系统初始化完成")

@@ -1,137 +1,72 @@
-"""Graph Builder 模块 - StateGraph 构建"""
+"""Graph Builder 模块 - 极简纯函数版"""
 
 import logging
-from typing import Callable, Dict, Any, List, Union
+from typing import Union, List
 
 from langgraph.graph import StateGraph, END
 from langgraph.constants import Send
 
 from ..schemas.state import AgentState
+from ..intent_analyzer import IntentAnalyzer
+from ..supervisor import _supervisor_logic
+from ..workers import WORKER_NODES
+from ..planner import Planner
 
 logger = logging.getLogger(__name__)
 
 
-def parallel_router(state: AgentState) -> Union[str, List[Send]]:
+def route_from_supervisor(state: AgentState) -> Union[str, List[Send]]:
     """
-    并发路由函数
-
-    如果 next 是列表，返回 Send 列表（fan-out）
-    如果 next 是字符串，直接返回节点名
+    并发路由函数：将 Supervisor 的指令翻译成 LangGraph 的并发节点
     """
-    next_nodes = state.get("next", [])
+    next_destinations = state.get("next", "planner_agent")
 
-    if isinstance(next_nodes, list) and len(next_nodes) > 1:
-        # 并发模式：返回 Send 列表
-        return [Send(node, state) for node in next_nodes]
-    elif isinstance(next_nodes, list) and len(next_nodes) == 1:
-        # 只有一个节点
-        return next_nodes[0]
-    elif isinstance(next_nodes, str):
-        # 字符串模式
-        return next_nodes
-    else:
-        # 默认路由到 planner
-        return "planner_agent"
+    if isinstance(next_destinations, str):
+        return next_destinations
+
+    if isinstance(next_destinations, list):
+        if len(next_destinations) == 1:
+            return next_destinations[0]
+        return [Send(node_name, state) for node_name in next_destinations]
+
+    return "planner_agent"
 
 
-class GraphBuilder:
-    """
-    StateGraph 构建器 - 配置驱动版
+def build_trip_graph(llm) -> StateGraph:
+    """构建多智能体旅行规划图"""
+    logger.info("开始构建极简版 StateGraph...")
 
-    职责：
-    1. 定义和构建多智能体工作流图
-    2. 从 worker_nodes 动态配置节点和边的连接关系
-    3. 支持并发路由（fan-out/fan-in）
-    """
+    workflow = StateGraph(AgentState)
 
-    def __init__(
-        self,
-        intent_analyzer_node: Callable,
-        supervisor_node: Callable,
-        planner_node: Callable,
-        worker_nodes: Dict[str, Callable],
-    ):
-        """
-        初始化图构建器
+    # 1. 添加核心大脑节点
+    intent_analyzer = IntentAnalyzer(llm)
+    workflow.add_node("intent_analyzer", intent_analyzer.get_node())
 
-        Args:
-            intent_analyzer_node: 意图分析节点
-            supervisor_node: Supervisor 决策节点
-            planner_node: 行程汇总节点
-            worker_nodes: Worker 节点字典，key为节点名，value为节点函数
-        """
-        self.intent_analyzer_node = intent_analyzer_node
-        self.supervisor_node = supervisor_node
-        self.planner_node = planner_node
-        self.worker_nodes = worker_nodes
+    workflow.add_node("supervisor", _supervisor_logic)
 
-        self._graph = None
+    planner = Planner(llm)
+    workflow.add_node("planner_agent", planner.get_node())
 
-    def build(self) -> StateGraph:
-        """
-        构建并编译 StateGraph
+    # 2. 动态注册所有 Worker 节点
+    for worker_name, worker_func in WORKER_NODES.items():
+        workflow.add_node(worker_name, worker_func)
 
-        Returns:
-            编译后的 StateGraph 实例
-        """
-        print("开始构建 StateGraph...")
+    # 3. 编排边（连线）
+    workflow.add_edge("intent_analyzer", "supervisor")
 
-        workflow = StateGraph(AgentState)
+    # 所有 Worker 节点执行完后，必须回到 supervisor 重新检查状态
+    for worker_name in WORKER_NODES.keys():
+        workflow.add_edge(worker_name, "supervisor")
 
-        # 添加意图分析、Supervisor 和 Planner 节点
-        workflow.add_node("intent_analyzer", self.intent_analyzer_node)
-        workflow.add_node("supervisor", self.supervisor_node)
-        workflow.add_node("planner_agent", self.planner_node)
+    # 4. 配置条件并发边
+    possible_destinations = list(WORKER_NODES.keys()) + ["planner_agent"]
 
-        # ✅ 从 worker_nodes 自动添加所有 Worker 节点
-        for name, node_func in self.worker_nodes.items():
-            workflow.add_node(name, node_func)
+    workflow.add_conditional_edges(
+        "supervisor", route_from_supervisor, possible_destinations
+    )
 
-        print(
-            f"已添加 {len(self.worker_nodes) + 3} 个节点 (intent_analyzer + supervisor + planner + {len(self.worker_nodes)} workers)"
-        )
+    # 出口
+    workflow.add_edge("planner_agent", END)
 
-        # ✅ 自动生成边：Worker -> Supervisor（所有Worker执行完后都回Supervisor）
-        for worker_name in self.worker_nodes.keys():
-            workflow.add_edge(worker_name, "supervisor")
-
-        print(f"已添加 {len(self.worker_nodes)} 条 Worker -> Supervisor 边")
-
-        # ✅ 使用并发路由器处理意图分析节点的条件边
-        routing_map = {name: name for name in self.worker_nodes.keys()}
-        routing_map["planner_agent"] = "planner_agent"
-
-        workflow.add_conditional_edges("intent_analyzer", parallel_router, routing_map)
-        print("已添加 IntentAnalyzer 并发条件边")
-
-        # ✅ 使用并发路由器处理 Supervisor 的条件边
-        workflow.add_conditional_edges("supervisor", parallel_router, routing_map)
-        print("已添加 Supervisor 并发条件边")
-
-        # Planner -> END
-        workflow.add_edge("planner_agent", END)
-
-        print("已添加 Planner -> END 边")
-
-        # 设置入口点为意图分析节点
-        workflow.set_entry_point("intent_analyzer")
-
-        print("已设置入口点: intent_analyzer")
-
-        # 编译图
-        self._graph = workflow.compile()
-
-        print("StateGraph 构建完成（支持意图分析 + 并发路由）")
-
-        return self._graph
-
-    def get_graph(self) -> StateGraph:
-        """
-        获取已构建的图
-
-        Returns:
-            StateGraph 实例
-        """
-        if self._graph is None:
-            raise RuntimeError("图尚未构建，请先调用 build()")
-        return self._graph
+    logger.info(f"图构建完成! 包含 {len(WORKER_NODES)} 个 Worker 节点。")
+    return workflow.compile()
