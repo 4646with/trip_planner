@@ -1,33 +1,178 @@
-1. 并发写入 + 重试会造成数据重复（这个依然成立）
-pythonattractions: Annotated[list, operator.add]
-operator.add 是追加语义。如果 attraction_agent 因网络抖动触发了重试，第二次结果会直接追加到第一次后面，Planner 会拿到重复的景点数据。建议加一个按名称去重的 merge 函数替换 operator.add：
-pythondef merge_unique_by_name(a: list, b: list) -> list:
-    seen = {item.get("name") for item in a if isinstance(item, dict)}
-    return a + [item for item in b if item.get("name") not in seen]
+这个诊断很准确。核心问题是系统缺少一个"收口层"——在启动任何搜索之前，先把用户输入里的**硬性指定**（"就住全季酒店"）和**软性偏好**（"想住经济一点的"）分离开来。
 
-2. parse_agent_output 的正则解析是整个系统最脆弱的点
-pythondef parse_agent_output(text: str) -> dict:
-    json_match = re.search(r"\{[\s\S]*\}", text)
-Supervisor 和 Planner 都已经用了 with_structured_output，但 4 个 Worker 的输出还在靠正则兜底。LLM 在描述性文字里夹带示例 JSON 时，这个正则会抓到错误的位置。既然 agent_output.py 里 AttractionData、WeatherData 这些 Pydantic 模型都已经写好了，Worker 也应该走 with_structured_output，让模型输出直接被校验，而不是解析字符串。
+以下是具体的修复方案，涉及三处改动：
 
-3. 测试文件引用了不存在的函数，测试套件无法运行
-python# test_agent_output.py 第113行
-from app.agents.workers import parse_and_validate
-workers.py 里没有 parse_and_validate，跑 pytest 直接 ImportError，整个测试文件全挂。这个 schema 里 AGENT_REGISTRY 也被测试引用，但测试里的 "search"/"attraction" key 和实际注册表的 key 对不上。
+---
 
-4. bocha_search_service.py 是死代码
-整个文件包括缓存层逻辑写得相当完整，但没有任何地方 import 或调用它。如果未来要用建议明确标注 TODO，否则直接删掉，避免维护者困惑。
+## 改动一：扩展 `TripIntent`，加入"前置锁定"字段
 
-5. Result.vue 里导出逻辑的重复是实质性技术债
-exportAsImage 和 exportAsPDF 共享了约 120 行完全相同的 DOM 处理代码。这两个函数唯一的差别在最后：一个调 canvas.toDataURL，一个调 jsPDF。应该抽成：
-typescriptconst prepareExportCanvas = async (): Promise<HTMLCanvasElement> => { ... }
+在 `schemas/state.py` 的 `TripIntent` 里新增三个字段：
 
-const exportAsImage = async () => {
-  const canvas = await prepareExportCanvas()
-  // 下载图片
-}
+```python
+# ── 用户明确锁定的具体实体（执行模式触发条件） ─────────
+pre_selected_hotel: Optional[str] = Field(
+    default=None,
+    description=(
+        "用户明确指定的酒店名称（执行模式）。"
+        "触发条件：用户用了排他性语气，如'就住XX'/'必须住XX'/'我已经订了XX'。"
+        "此字段非空时，hotel_agent 不再做推荐搜索，只做精确查询。"
+        "例：'我一定要住全季酒店' → '全季酒店'"
+    ),
+)
 
-const exportAsPDF = async () => {
-  const canvas = await prepareExportCanvas()
-  // 生成PDF
-}
+pre_selected_restaurants: List[str] = Field(
+    default_factory=list,
+    description=(
+        "用户明确指定的餐厅名称列表（执行模式）。"
+        "触发条件：'就去那家老碗会'/'必须吃XX'。"
+        "此字段非空时，对应餐厅直接做精确查询，不走推荐逻辑。"
+    ),
+)
+
+pre_selected_attractions: List[str] = Field(
+    default=None,   # 注意：这和 given_attractions 语义不同
+    description=(
+        "用户明确不想让系统推荐、直接锁定要去的景点列表。"
+        "given_attractions 是'用户提到了想去'（系统仍可补充），"
+        "pre_selected_attractions 是'就去这些，不要额外推荐'。"
+        "触发词：'就去这两个地方'/'行程就安排这几个'。"
+    ),
+)
+```
+
+同时给 `IntentAnalyzer` 的 `INTENT_PROMPT` 加入对应的提取规则：
+
+```python
+INTENT_PROMPT = """...（原有内容）...
+
+规则7：前置锁定实体的提取（pre_selected 系列字段）
+判断标准：用户用了"就"、"只"、"必须"、"一定"、"已经订了"等排他性词汇，
+且后面跟着一个具体的商家/地点名称时，提取到对应的 pre_selected 字段。
+
+区分 given_attractions 和 pre_selected_attractions：
+- given_attractions：用户说"想去故宫"——系统还可以在故宫基础上补充其他推荐
+- pre_selected_attractions：用户说"就去故宫和颐和园，其他不要安排"——系统不得额外推荐
+
+示例：
+"我一定要住全季酒店" → pre_selected_hotel: "全季酒店", hotel_intent: "need"
+"就去老碗会吃饭" → pre_selected_restaurants: ["老碗会"]
+"行程就安排故宫和颐和园，不要其他的" → pre_selected_attractions: ["故宫", "颐和园"], need_attraction_search: false
+"""
+```
+
+---
+
+## 改动二：给 Worker 加入"执行模式"分支
+
+在 `workers.py` 的 `BaseWorker._build_messages` 里，加入模式判断逻辑：
+
+```python
+def _build_messages(self, state: AgentState) -> List[BaseMessage]:
+    system_msg = SystemMessage(content=self.base_prompt)
+    user_original = state["messages"][0].content if state.get("messages") else "无"
+    
+    # ✅ 新增：检查是否有前置锁定实体，决定走哪个模式
+    execution_directive = self._build_execution_directive(state)
+    context = self._build_context(state)
+    retry_context = self._build_retry_context(state)
+
+    return [
+        system_msg,
+        HumanMessage(content=f"【用户原始需求】{user_original}"),
+        HumanMessage(content=f"【当前任务上下文】{context}{retry_context}"),
+        # 执行指令优先级最高，放在最后确保 LLM 注意到
+        *([HumanMessage(content=execution_directive)] if execution_directive else []),
+    ]
+
+def _build_execution_directive(self, state: AgentState) -> Optional[str]:
+    """
+    根据 trip_intent 中的 pre_selected 字段，
+    生成'执行模式'指令，覆盖默认的'推荐模式'行为。
+    
+    返回 None 表示走默认推荐模式。
+    """
+    intent = state.get("trip_intent", {})
+    
+    if self.name == "hotel_agent":
+        pre_selected = intent.get("pre_selected_hotel")
+        if pre_selected:
+            return (
+                f"⚠️【执行模式 - 最高优先级】\n"
+                f"用户已明确指定酒店：「{pre_selected}」\n"
+                f"你的任务不是推荐，而是执行：\n"
+                f"1. 调用 maps_text_search，keywords='{pre_selected}', city=目标城市\n"
+                f"2. 取第一个结果的坐标、地址\n"
+                f"3. 直接输出该酒店信息，不要推荐其他酒店\n"
+                f"禁止：搜索其他酒店、给出替代方案、提及其他品牌"
+            )
+    
+    elif self.name == "attraction_agent":
+        pre_selected = intent.get("pre_selected_attractions")
+        if pre_selected:
+            names = "、".join(pre_selected)
+            return (
+                f"⚠️【执行模式 - 最高优先级】\n"
+                f"用户已锁定景点：{names}\n"
+                f"只需对这些景点逐一调用 maps_text_search 获取坐标和详情。\n"
+                f"禁止：额外推荐其他景点、扩展景点列表"
+            )
+    
+    # 其他 agent 或无前置锁定 → 走推荐模式
+    return None
+```
+
+---
+
+## 改动三：在 `rule_router` 里加入"执行模式快通道"
+
+当前 `fault_check_router` 判断"该不该派 hotel_agent"的逻辑只看有没有 attractions 数据。需要加一个判断：如果用户锁定了酒店，hotel_agent 可以和第一梯队并发（因为它不需要 attractions 数据来做推荐了）：
+
+```python
+def fault_check_router(state: AgentState) -> Dict[str, Any]:
+    # ... 原有逻辑 ...
+    
+    intent = state.get("trip_intent", {})
+    
+    # ✅ 新增：执行模式下的快通道判断
+    # 如果用户已锁定酒店，hotel_agent 不依赖 attractions，可提前并发
+    pre_selected_hotel = intent.get("pre_selected_hotel")
+    hotel_can_run_early = bool(pre_selected_hotel)
+    
+    if not first_wave_done:
+        retry = []
+        if need_attractions and not has_attractions:
+            if call_count.get("attraction_agent", 0) == 0:
+                retry.append("attraction_agent")
+        if need_weather and not has_weather:
+            if call_count.get("weather_agent", 0) == 0:
+                retry.append("weather_agent")
+        # ✅ 执行模式：hotel_agent 和第一梯队一起并发
+        if hotel_can_run_early and not has_hotels:
+            if call_count.get("hotel_agent", 0) == 0:
+                retry.append("hotel_agent")
+        
+        if retry:
+            return {"next": retry if len(retry) > 1 else retry[0]}
+        # ...
+```
+
+---
+
+## 整体数据流对比
+
+```
+旧流程（所有路径都走推荐模式）：
+用户输入 → IntentAnalyzer → Supervisor → hotel_agent(搜索推荐) → Planner
+                                                ↑ 可能忽略"就住全季"
+
+新流程（执行模式快通道）：
+用户输入 → IntentAnalyzer
+              ↓ 提取 pre_selected_hotel="全季酒店"
+           Supervisor
+              ↓ hotel_can_run_early=True，与第一梯队并发
+           hotel_agent(执行模式: 只查全季酒店坐标) ──→ Planner
+           attraction_agent(推荐模式) ──────────────↗
+           weather_agent ──────────────────────────↗
+```
+
+核心思路是：`TripIntent` 里的 `pre_selected_*` 字段是整个系统唯一的"锁定信号"。意图节点负责提取，Worker 负责响应，路由器负责优化并发——三者之间通过状态传递，不需要任何一层重复做 NLU。

@@ -21,7 +21,6 @@ from .workers import WorkerExecutor as WorkerManager, get_agent_registry
 from .planner import Planner
 from .graph.builder import GraphBuilder
 from .utils.parsers import parse_and_build_plan_async
-from .utils.trip_store import get_trip_plan_store
 
 logger = logging.getLogger(__name__)
 
@@ -159,18 +158,6 @@ class MapAgentsSystem:
         result = await parse_and_build_plan_async(
             final_state.get("final_plan"), request
         )
-
-        try:
-            from .utils.trip_store import get_trip_plan_store
-
-            get_trip_plan_store().save(
-                city=request.city,
-                travel_days=request.travel_days,
-                plan=result.model_dump(),
-            )
-            logger.info(f"[{rid}] 行程已落库")
-        except Exception as e:
-            logger.warning(f"[{rid}] 行程落库失败（不影响用户结果）: {e}")
 
         return result
 
