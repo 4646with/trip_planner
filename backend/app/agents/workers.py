@@ -565,41 +565,47 @@ class WorkerExecutor:
 # ==========================================
 # Planner 数据清洗工具
 # ==========================================
+ROUTE_ESSENTIAL_KEYS = {
+    "origin",  # 起点
+    "destination",  # 终点
+    "transportation",  # 交通方式
+    "duration",  # 行程时长
+    "route_detail",  # 路线详情
+}
+
+ESSENTIAL_KEYS = {
+    "name",  # 景点/酒店名称，必须
+    "address",  # 地址，用于地图标注
+    "location",  # 经纬度，用于地图标注
+    "visit_duration",  # 建议游览时长，用于时间安排
+    "description",  # 描述，用于生成行程文案
+    "category",  # 类别，用于分类展示
+    "ticket_price",  # 门票价格，用于预算计算
+    "rating",  # 评分，用于质量判断
+    # 酒店专属字段
+    "price_range",  # 价格区间，用于预算计算
+    "distance",  # 距景点距离，用于推荐理由
+}
+
+
 def _extract_planner_fields(items: list, max_items: int = 5) -> list:
-    """
-    数据驱动的字段清洗：只保留 Planner 真正需要的字段。
+    if not items:
+        return []
 
-    核心思路的转变：
-    旧版是"截断字符串"——先保留所有字段，然后按字符数切断，
-    导致 JSON 可能被截断成无效格式。
-
-    新版是"过滤字段"——按字段名精确控制，确保每个保留的字段都完整，
-    同时大幅减少不必要的数据量（如 photos、poi_id 等 Planner 用不到的字段）。
-
-    这样做的好处是：数据量可控且可预期，不会出现 JSON 截断导致的解析错误。
-    """
-    # Planner 生成行程时真正需要的字段，其他字段是 Worker 内部使用的
-    ESSENTIAL_KEYS = {
-        "name",  # 景点/酒店名称，必须
-        "address",  # 地址，用于地图标注
-        "location",  # 经纬度，用于地图标注
-        "visit_duration",  # 建议游览时长，用于时间安排
-        "description",  # 描述，用于生成行程文案
-        "category",  # 类别，用于分类展示
-        "ticket_price",  # 门票价格，用于预算计算
-        "rating",  # 评分，用于质量判断
-        # 酒店专属字段
-        "price_range",  # 价格区间，用于预算计算
-        "distance",  # 距景点距离，用于推荐理由
-    }
+    first_item = items[0]
+    if isinstance(first_item, dict) and (
+        "origin" in first_item or "transportation" in first_item
+    ):
+        current_keys = ROUTE_ESSENTIAL_KEYS
+    else:
+        current_keys = ESSENTIAL_KEYS
 
     cleaned = []
     for item in items[:max_items]:
         if not isinstance(item, dict):
             continue
-        # 只保留 Planner 需要的字段，过滤掉 photos、poi_id 等无用字段
-        cleaned_item = {k: v for k, v in item.items() if k in ESSENTIAL_KEYS}
-        if cleaned_item.get("name"):  # 没有名称的数据无意义，跳过
+        cleaned_item = {k: v for k, v in item.items() if k in current_keys}
+        if cleaned_item:
             cleaned.append(cleaned_item)
 
     return cleaned
