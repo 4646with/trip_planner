@@ -2,8 +2,7 @@
 核心改进：
 1. AGENT_REGISTRY: 配置化驱动，新增 Agent 只需填表
 2. 动态注册: 自动实例化所有注册表中的 Worker
-3. 高并发: Semaphore(40) 榨干 50 并发额度
-4. 结构化输出: 所有 Agent 返回结构化 JSON 数据
+3. 结构化输出: 所有 Agent 返回结构化 JSON 数据
 """
 
 import asyncio
@@ -25,8 +24,7 @@ from .tools import web_search as original_web_search
 logger = logging.getLogger(__name__)
 
 
-# ==========================================
-# web_search 体感型包装器 - 自动补全后缀
+
 # ==========================================
 # web_search 体感型包装器 - 自动补全后缀
 # ==========================================
@@ -508,8 +506,7 @@ class WorkerExecutor:
     def __init__(self, llm, max_concurrency: int = 15):
         """
         max_concurrency: 最大并发数
-        - Gemini 免费版 RPM 5，建议 1-2
-        - 智谱AI，建议 10-15
+    
         """
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._manager = AgentFactory(llm)
