@@ -331,12 +331,69 @@ class BaseWorker:
         user_original = state["messages"][0].content if state.get("messages") else "无"
         context = self._build_context(state)
         retry_context = self._build_retry_context(state)
+        execution_directive = self._build_execution_directive(state)
 
-        return [
+        messages = [
             system_msg,
             HumanMessage(content=f"【用户原始需求】{user_original}"),
             HumanMessage(content=f"【当前任务上下文】{context}{retry_context}"),
         ]
+
+        if execution_directive:
+            messages.append(HumanMessage(content=execution_directive))
+
+        return messages
+
+    def _build_execution_directive(self, state: AgentState) -> Optional[str]:
+        """
+        根据 trip_intent 中的 pre_selected 字段，
+        生成'执行模式'指令，覆盖默认的'推荐模式'行为。
+
+        返回 None 表示走默认推荐模式。
+        """
+        intent = state.get("trip_intent", {})
+
+        if self.name == "hotel_agent":
+            pre_selected = intent.get("pre_selected_hotel")
+            if pre_selected:
+                return (
+                    f"⚠️【执行模式 - 最高优先级】\n"
+                    f"用户已明确指定酒店：「{pre_selected}」\n"
+                    f"你的任务不是推荐，而是执行：\n"
+                    f"1. 调用 maps_text_search，keywords='{pre_selected}', city=目标城市\n"
+                    f"2. 取第一个结果的坐标、地址\n"
+                    f"3. 直接输出该酒店信息，不要推荐其他酒店\n"
+                    f"禁止：搜索其他酒店、给出替代方案、提及其他品牌"
+                )
+
+        elif self.name == "attraction_agent":
+            pre_selected = intent.get("pre_selected_attractions", [])
+            if pre_selected:
+                names = "、".join(pre_selected)
+                return (
+                    f"⚠️【混合模式 - 最高优先级】\n"
+                    f"用户已锁定景点：{names}\n"
+                    f"你的任务：\n"
+                    f"1. 先调用 maps_text_search 逐一获取这些景点的坐标和详情\n"
+                    f"2. 如果行程天数 > 锁定的景点数量，可以补充推荐其他景点\n"
+                    f"3. 优先推荐与锁定景点在同一区域的选择\n"
+                    f"禁止：替换用户锁定的景点"
+                )
+
+        elif self.name == "restaurant_agent":
+            pre_selected = intent.get("pre_selected_restaurants", [])
+            if pre_selected:
+                names = "、".join(pre_selected)
+                return (
+                    f"⚠️【混合模式 - 最高优先级】\n"
+                    f"用户已指定餐厅：{names}\n"
+                    f"你的任务：\n"
+                    f"1. 先调用 maps_text_search 逐一获取这些餐厅的坐标、地址和评价\n"
+                    f"2. 如果需要，可补充推荐其他餐厅\n"
+                    f"禁止：替换用户指定的餐厅"
+                )
+
+        return None
 
     def _build_context(self, state: AgentState) -> str:
         """构建任务上下文"""

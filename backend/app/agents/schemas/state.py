@@ -109,6 +109,35 @@ class TripIntent(BaseModel):
         ),
     )
 
+    # ── 用户明确锁定的实体（执行模式触发条件）────────────────────
+    pre_selected_hotel: Optional[str] = Field(
+        default=None,
+        description=(
+            "用户明确指定的酒店名称（执行模式）。"
+            "触发条件：用户用了排他性语气，如'就住XX'/'必须住XX'/'我已经订了XX'。"
+            "此字段非空时，hotel_agent 不做推荐搜索，只做精确查询。"
+            "例：'我一定要住全季酒店' → '全季酒店'"
+        ),
+    )
+
+    pre_selected_attractions: List[str] = Field(
+        default_factory=list,
+        description=(
+            "用户明确锁定要去的景点列表（混合模式）。"
+            "触发条件：'就去这两个地方'/'行程就安排这几个'。"
+            "系统必须先获取这些景点的详细信息，如有空余行程再补充推荐。"
+        ),
+    )
+
+    pre_selected_restaurants: List[str] = Field(
+        default_factory=list,
+        description=(
+            "用户明确指定的餐厅名称列表（混合模式）。"
+            "触发条件：'就去那家老碗会'/'必须吃XX'。"
+            "系统先精确查询指定餐厅，如有需要再补充推荐其他。"
+        ),
+    )
+
     # ── 特殊需求（这是关键词匹配做不到的，必须用LLM） ──────────
     special_requirements: List[str] = Field(
         default_factory=list,
