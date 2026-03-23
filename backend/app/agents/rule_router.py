@@ -3,41 +3,9 @@
 import logging
 from typing import Dict, Any, List, Union
 from .schemas.state import AgentState
+from .constants import MAX_AGENT_CALLS
 
 logger = logging.getLogger(__name__)
-
-MAX_AGENT_CALLS = 6
-
-
-def intent_based_router(state: AgentState) -> Dict[str, Any]:
-    """
-    基于意图标志位的规则路由（首次决策）
-
-    返回：{"next": ["attraction_agent", "weather_agent", ...]}
-    """
-    rid = state.get("request_id", "unknown")
-    intent = state.get("trip_intent", {})
-
-    agents = []
-
-    if intent.get("need_attraction_search", True):
-        agents.append("attraction_agent")
-
-    if intent.get("need_weather", True):
-        agents.append("weather_agent")
-
-    if intent.get("hotel_intent") != "skip":
-        agents.append("hotel_agent")
-
-    if intent.get("need_route", True):
-        agents.append("route_agent")
-
-    logger.info(f"[{rid}] 规则路由: {agents}")
-
-    if not agents:
-        return {"next": "planner_agent"}
-
-    return {"next": agents if len(agents) > 1 else agents[0]}
 
 
 def fault_check_router(state: AgentState) -> Dict[str, Any]:
@@ -127,14 +95,6 @@ def fault_check_router(state: AgentState) -> Dict[str, Any]:
 
 def smart_router(state: AgentState) -> Dict[str, Any]:
     """
-    智能路由器：自动选择规则路由或容错检查
-
-    首次调用：使用 intent_based_router
-    后续调用：使用 fault_check_router
+    智能路由器：统一使用 fault_check_router 进行路由决策
     """
-    total_calls = sum(state.get("agent_call_count", {}).values())
-
-    if total_calls == 0:
-        return intent_based_router(state)
-    else:
-        return fault_check_router(state)
+    return fault_check_router(state)

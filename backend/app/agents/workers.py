@@ -27,28 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # ==========================================
-# 重试引导 - 错误类型提示映射表
-# ==========================================
-RETRY_ERROR_HINTS = {
-    "parse_failed": "确保返回纯JSON格式，不要有其他文字",
-    "empty_result": "尝试扩大搜索范围或使用替代关键词",
-    "tool_failed": "换一种方式调用工具或调整搜索关键词",
-    "default": "分析失败原因，调整搜索策略后重试",
-}
-
-
-def _classify_error(error_msg: str) -> str:
-    """根据错误信息分类，返回提示类型"""
-    msg_lower = error_msg.lower()
-    if "json" in msg_lower or "解析" in error_msg or "parse" in msg_lower:
-        return "parse_failed"
-    elif "空" in error_msg or "empty" in msg_lower or "no result" in msg_lower:
-        return "empty_result"
-    elif "tool" in msg_lower or "工具" in error_msg or "api" in msg_lower:
-        return "tool_failed"
-    return "default"
-
-
+# web_search 体感型包装器 - 自动补全后缀
 # ==========================================
 # web_search 体感型包装器 - 自动补全后缀
 # ==========================================
@@ -63,9 +42,15 @@ def create_enhanced_web_search(agent_type: str) -> StructuredTool:
     suffix = _WEB_SEARCH_SUFFIXES.get(agent_type, "")
 
     async def enhanced_web_search(query: str) -> str:
-        enhanced_query = query + suffix
-        logger.info(f"[{agent_type}] web_search 增强: '{query}' -> '{enhanced_query}'")
-        return await original_web_search.ainvoke({"query": enhanced_query})
+        try:
+            enhanced_query = query + suffix
+            logger.info(
+                f"[{agent_type}] web_search 增强: '{query}' -> '{enhanced_query}'"
+            )
+            return await original_web_search.ainvoke({"query": enhanced_query})
+        except Exception as e:
+            logger.error(f"[web_search] 失败: {e}")
+            return ""
 
     from pydantic import BaseModel
 
@@ -121,7 +106,7 @@ AGENT_REGISTRY = {
 
 
 def with_retry_and_log(func):
-    """统一的异常处理和日志装饰器，支持 Gemini 429 重试"""
+    """统一的异常处理和日志装饰器，支持 Gemini 429 流重试"""
     import re as regex_module
 
     @wraps(func)
@@ -129,7 +114,9 @@ def with_retry_and_log(func):
         agent_name = self.name
         print(f"[{agent_name}] 开始执行...")
 
-        max_retries = 3
+        max_retries = 1  # 仅允许1次重试，避免阻塞信号量
+        last_error = None
+
         for attempt in range(1, max_retries + 1):
             try:
                 result = await func(self, state, *args, **kwargs)
@@ -137,40 +124,47 @@ def with_retry_and_log(func):
                 return result
             except Exception as e:
                 error_str = str(e)
+                last_error = e
 
-                # 检查是否是 429 限流错误
+                # 检查是否是 429 限流错误 - 仅限流重试
                 if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    # 提取等待时间
                     wait_match = regex_module.search(r"retry in ([\d.]+)s", error_str)
                     if wait_match:
-                        wait_time = float(wait_match.group(1)) + 1  # 多等 1 秒
+                        wait_time = float(wait_match.group(1)) + 1
                         print(
                             f"[{agent_name}] 触发限流，等待 {wait_time:.1f}s (尝试 {attempt}/{max_retries})"
                         )
                         await asyncio.sleep(wait_time)
-                        continue
+                        # 继续重试
                     else:
-                        print(
-                            f"[{agent_name}] 429 限流，等待 20s (尝试 {attempt}/{max_retries})"
-                        )
-                        await asyncio.sleep(20)
-                        continue
+                        print(f"[{agent_name}] 429 限流，等待 10s")
+                        await asyncio.sleep(10)
+                        # 继续重试
+                else:
+                    # 其他错误不重试，直接失败
+                    print(f"[{agent_name}] 执行失败: {error_str[:200]}")
+                    import traceback
 
-                # 其他错误
-                print(f"[{agent_name}] 执行失败: {error_str[:200]}")
-                if attempt < max_retries:
-                    print(f"[{agent_name}] 重试中... ({attempt}/{max_retries})")
-                    await asyncio.sleep(5)
-                    continue
+                    traceback.print_exc()
+                    return {
+                        "messages": state.get("messages", []),
+                        self.output_key: [],
+                        "agent_results": self._update_agent_results(
+                            state, success=False
+                        ),
+                    }
 
-                import traceback
+        # 重试次数用尽，返回失败
+        print(f"[{agent_name}] 重试次数用尽，执行失败")
+        if last_error:
+            import traceback
 
-                traceback.print_exc()
-                return {
-                    "messages": state.get("messages", []),
-                    self.output_key: [],
-                    "agent_results": self._update_agent_results(state, success=False),
-                }
+            traceback.print_exc()
+        return {
+            "messages": state.get("messages", []),
+            self.output_key: [],
+            "agent_results": self._update_agent_results(state, success=False),
+        }
 
     return wrapper
 
@@ -182,81 +176,55 @@ class AgentFactory:
         self.llm = llm
         self._agent_cache: Dict[str, Any] = {}
 
-    def get_or_create_agent(self, name: str, tools: List[BaseTool]) -> Any:
-        if name in self._agent_cache:
-            return self._agent_cache[name]
+    def _build_cache_key(self, name: str, tools: List[BaseTool]) -> str:
+        tool_names = tuple(sorted(t.name for t in tools))
+        return f"{name}:{tool_names}"
 
-        print(f"[{name}] 冷启动，正在创建全新的 Agent 实例...")
+    def get_or_create_agent(self, name: str, tools: List[BaseTool]) -> Any:
+        key = self._build_cache_key(name, tools)
+
+        if key in self._agent_cache:
+            return self._agent_cache[key]
+
+        logger.info(f"[{name}] 创建新 Agent 实例")
         agent = create_react_agent(model=self.llm, tools=tools)
-        self._agent_cache[name] = agent
+        self._agent_cache[key] = agent
         return agent
 
 
+def _safe_extract_json(text: str) -> dict:
+    """稳定 JSON 提取（避免 regex 贪婪问题）"""
+    stack = []
+    start = None
+
+    for i, c in enumerate(text):
+        if c == "{":
+            if not stack:
+                start = i
+            stack.append(c)
+        elif c == "}":
+            if stack:
+                stack.pop()
+                if not stack and start is not None:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except Exception:
+                        return {}
+
+    return {}
+
+
 def parse_agent_output(text: str) -> dict:
-    """解析 Agent 返回的 JSON 输出"""
-    try:
-        json_match = re.search(r"\{[\s\S]*\}", text)
-        if json_match:
-            data = json.loads(json_match.group())
-            # 确保所有值都是列表类型（LangGraph 的 Annotated[list, operator.add] 要求）
-            for key in ["attractions", "weather_info", "hotels", "routes"]:
-                if key in data and not isinstance(data[key], list):
-                    # 如果是单个对象，包装成列表
-                    data[key] = [data[key]] if data[key] else []
-            return data
-    except json.JSONDecodeError:
-        pass
+    data = _safe_extract_json(text)
 
-    return {"success": False, "data": {}, "raw_text": text}
+    if not isinstance(data, dict):
+        return {}
 
+    for key in ["attractions", "weather_info", "hotels", "routes"]:
+        if key in data and not isinstance(data[key], list):
+            data[key] = [data[key]] if data[key] else []
 
-def parse_and_validate(text: str, config: dict) -> list:
-    """
-    解析并验证 Agent 输出
-
-    Args:
-        text: Agent 返回的文本（包含 JSON）
-        config: Agent 配置，必须包含 output_key
-
-    Returns:
-        验证后的数据列表，失败或无效时返回空列表
-    """
-    # 提取 JSON
-    try:
-        json_match = re.search(r"\{[\s\S]*\}", text)
-        if not json_match:
-            return []
-        data = json.loads(json_match.group())
-    except (json.JSONDecodeError, AttributeError):
-        return []
-
-    # 获取输出键
-    output_key = config.get("output_key")
-    if not output_key:
-        return []
-
-    # 获取数据列表
-    items = data.get(output_key, [])
-    if not isinstance(items, list):
-        return []
-
-    # 过滤空项
-    valid_items = [item for item in items if item and isinstance(item, dict)]
-
-    # 应用 validator（如果存在）
-    validator = config.get("validator")
-    if validator:
-        validated_items = []
-        for item in valid_items:
-            try:
-                validated = validator(item)
-                if validated:
-                    validated_items.append(validated)
-            except Exception:
-                continue
-        valid_items = validated_items
-
-    return valid_items
+    return data
 
 
 class BaseWorker:
@@ -321,19 +289,16 @@ class BaseWorker:
                 e for e in state.get("errors", []) if e.get("agent") == self.name
             ]
             recent_errors = my_errors[-3:] if len(my_errors) >= 3 else my_errors
+            error_lines = []
             if recent_errors:
-                error_lines = []
                 for e in recent_errors:
                     err_msg = e.get("error", "")[:200]
-                    hint_key = _classify_error(err_msg)
-                    error_lines.append(
-                        f"- ❌ {err_msg} → {RETRY_ERROR_HINTS[hint_key]}"
-                    )
-                retry_context = (
-                    f"\n【重试说明 - 第{call_count + 1}次尝试】\n"
-                    + "之前执行失败记录：\n"
-                    + "\n".join(error_lines)
-                )
+                    error_lines.append(f"- ❌ {err_msg}")
+            retry_context = (
+                f"\n【重试说明 - 第{call_count + 1}次尝试】\n"
+                + "之前执行失败记录：\n"
+                + "\n".join(error_lines)
+            )
 
         agent_specific_context = ""
         if self.name == "route_agent":
@@ -389,11 +354,14 @@ class BaseWorker:
         invoke_state = {"messages": pruned_messages}
 
         response = await self.agent.ainvoke(invoke_state)
+
         final_text = self._parse_response(response)
 
-        print(f"[{self.name}] 原始返回: {final_text[:500]}...", flush=True)
-
-        parsed = parse_agent_output(final_text)
+        if not final_text:
+            logger.warning(f"[{self.name}] 空响应")
+            parsed = {}
+        else:
+            parsed = parse_agent_output(final_text)
 
         # route_agent 数据验证：过滤不在 attractions 列表中的地点
         if self.name == "route_agent":
@@ -427,9 +395,14 @@ class BaseWorker:
         agent_results = self._update_agent_results(state, success=has_data)
         call_count = self._update_call_count(state)
 
+        result_data = parsed.get(self.output_key, [])
+
+        if not isinstance(result_data, list):
+            result_data = []
+
         return {
-            "messages": response["messages"],
-            self.output_key: parsed.get(self.output_key, []),
+            "messages": response.get("messages", []),
+            self.output_key: result_data,
             "agent_results": agent_results,
             "agent_call_count": call_count,
         }
@@ -457,7 +430,7 @@ class WorkerExecutor:
             print(f"[WorkerExecutor] 智谱AI模式，并发限制: {max_concurrency}")
 
         for agent_id, config in AGENT_REGISTRY.items():
-            tools = get_mcp_manager().get_tools_by_names(config["tools"])
+            tools = list(get_mcp_manager().get_tools_by_names(config["tools"]))
 
             if config.get("use_enhanced_web_search", False):
                 enhanced_search = create_enhanced_web_search(agent_id)
@@ -485,15 +458,18 @@ class WorkerExecutor:
 
         async def dynamic_node(state: AgentState) -> Dict[str, Any]:
             async with self._semaphore:
-                return await worker_instance.execute(state)
+                try:
+                    return await worker_instance.execute(state)
+                except Exception as e:
+                    logger.error(f"[{worker_instance.name}] 崩溃: {e}")
+                    return {
+                        "messages": state.get("messages", []),
+                        worker_instance.output_key: [],
+                        "agent_results": {},
+                        "agent_call_count": state.get("agent_call_count", {}),
+                    }
 
         return dynamic_node
-
-    def get_all_node_funcs(self) -> Dict[str, callable]:
-        """获取所有节点的动态函数"""
-        return {
-            agent_id: self.get_node_func(agent_id) for agent_id in AGENT_REGISTRY.keys()
-        }
 
 
 # ==========================================
@@ -658,7 +634,7 @@ class Planner:
         ]
 
         try:
-            plan_obj = self.structured_llm.invoke(planner_messages)
+            plan_obj = await self.structured_llm.ainvoke(planner_messages)
             final_plan = plan_obj.model_dump()
             logger.info("Planner 成功生成强类型校验后的旅行计划。")
         except Exception as e:

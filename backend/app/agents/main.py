@@ -19,7 +19,7 @@ from .intent_analyzer import IntentAnalyzer
 from .supervisor import Supervisor
 from .workers import WorkerExecutor as WorkerManager, Planner, get_agent_registry
 from .graph.builder import GraphBuilder
-from .utils.parsers import parse_and_build_plan, parse_and_build_plan_async
+from .utils.parsers import parse_and_build_plan_async
 from .utils.trip_store import get_trip_plan_store
 
 logger = logging.getLogger(__name__)
@@ -139,37 +139,7 @@ class MapAgentsSystem:
             "trip_intent": {},
         }
 
-    def plan_trip(self, request: TripRequest) -> TripPlan:
-        """
-        规划旅行（同步接口）
-
-        Args:
-            request: 旅行请求
-
-        Returns:
-            旅行计划
-        """
-        if not self._initialized or self._graph is None:
-            raise RuntimeError("系统未初始化，请先调用 initialize()")
-
-        # 构建初始状态
-        initial_state = self._build_initial_state(request)
-
-        logger.info("=" * 60)
-        logger.info("🚀 启动多智能体协作（同步模式）...")
-        logger.info("=" * 60)
-
-        # 执行图
-        final_state = self._graph.invoke(initial_state)
-
-        logger.info("=" * 60)
-        logger.info("✅ 规划完成")
-        logger.info("=" * 60)
-
-        # 解析结果（同步版本，不使用 Tavily 搜索）
-        return parse_and_build_plan(final_state.get("final_plan"), request)
-
-    async def plan_trip_async(self, request: TripRequest) -> TripPlan:
+    async def plan_trip(self, request: TripRequest) -> TripPlan:
         if not self._initialized or self._graph is None:
             raise RuntimeError("系统未初始化，请先调用 initialize()")
 

@@ -203,8 +203,4 @@ class RouteData(BaseModel):
             return 0
 
 
-class SearchResults(BaseModel):
-    """search_agent 的输出结构，同时包含景点和酒店"""
 
-    attractions: List[AttractionData] = Field(default_factory=list)
-    hotels: List[HotelData] = Field(default_factory=list)
