@@ -11,13 +11,14 @@ import json
 import logging
 import re
 from functools import wraps
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.prebuilt import create_react_agent
 
 from .schemas.state import AgentState
+from .schemas.agent_output import AttractionData, WeatherData, HotelData, RouteData
 from .prompts.agents import AgentPrompts
 from ..services.mcp_tools import get_mcp_manager, AmapTools
 from .tools import web_search as original_web_search
@@ -72,6 +73,36 @@ def create_enhanced_web_search(agent_type: str) -> StructuredTool:
 # ==========================================
 # Agent 注册表 - 新增 Agent 只需在此配置
 # ==========================================
+def build_route_context(worker: "BaseWorker", state: AgentState) -> str:
+    """route_agent 专用上下文构建器"""
+    attractions = state.get("attractions", [])
+    if not attractions:
+        return "\n【警告】当前还未获取到任何景点数据，请直接返回空路线结果。"
+
+    places = []
+    for a in attractions:
+        name = a.get("name", "未知景点")
+        lon = a.get("longitude") or (a.get("location") or {}).get("longitude")
+        lat = a.get("latitude") or (a.get("location") or {}).get("latitude")
+
+        if lon and lat:
+            places.append(
+                f"- {name}：坐标 {lon},{lat}（调用工具时origin/destination必须用此坐标）"
+            )
+        else:
+            logger.warning(f"[route_agent] 景点 {name} 缺少坐标，跳过路线规划")
+
+    if places:
+        return (
+            f"\n【重要路线规划数据】\n"
+            f"以下是景点的精确坐标，调用 maps_direction_walking 等工具时，\n"
+            f"origin 和 destination 参数必须使用'经度,纬度'格式的数字坐标，\n"
+            f"绝对不能使用景点名称或地址文字：\n" + "\n".join(places)
+        )
+    else:
+        return "\n【警告】景点数据缺少坐标信息，无法进行路线规划，请返回空路线。"
+
+
 AGENT_REGISTRY = {
     "attraction": {
         "name": "attraction_agent",
@@ -79,12 +110,14 @@ AGENT_REGISTRY = {
         "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL],
         "output_key": "attractions",
         "use_enhanced_web_search": True,
+        "validator": lambda item: AttractionData(**item).model_dump(),
     },
     "weather": {
         "name": "weather_agent",
         "prompt": AgentPrompts.WEATHER,
         "tools": [AmapTools.WEATHER],
         "output_key": "weather_info",
+        "validator": lambda item: WeatherData(**item).model_dump(),
     },
     "hotel": {
         "name": "hotel_agent",
@@ -92,6 +125,7 @@ AGENT_REGISTRY = {
         "tools": [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL],
         "output_key": "hotels",
         "use_enhanced_web_search": True,
+        "validator": lambda item: HotelData(**item).model_dump(),
     },
     "route": {
         "name": "route_agent",
@@ -101,6 +135,8 @@ AGENT_REGISTRY = {
             AmapTools.DIRECTION_DRIVING,
         ],
         "output_key": "routes",
+        "validator": lambda item: RouteData(**item).model_dump(),
+        "context_builder": build_route_context,
     },
 }
 
@@ -237,10 +273,13 @@ class BaseWorker:
         base_prompt: str,
         tools: List[BaseTool],
         output_key: str,
+        config: Optional[Dict[str, Any]] = None,
     ):
         self.name = name
         self.base_prompt = base_prompt
         self.output_key = output_key
+        self.config = config or {}
+        self.validator = self.config.get("validator")
         self.agent = manager.get_or_create_agent(name, tools)
 
     def _parse_response(self, response: dict) -> str:
@@ -265,107 +304,126 @@ class BaseWorker:
 
     @with_retry_and_log
     async def execute(self, state: AgentState) -> Dict[str, Any]:
-        import sys
-
         print(f"[{self.name}] 正在调用 LLM 和工具...", flush=True)
 
         city = state.get("city", "未知")
         print(f"[{self.name}] >>>>>>> 目的地: {city} <<<<<<", flush=True)
 
-        # 【KV-Cache优化 + Token剪枝】
-        # 1. System Prompt 保持静态（无变量注入）
-        # 2. 上下文通过 HumanMessage 传递
-        system_msg = SystemMessage(content=self.base_prompt)
+        pruned_messages = self._build_messages(state)
+        response = await self.agent.ainvoke({"messages": pruned_messages})
 
+        attractions = state.get("attractions", [])
+        parsed = self._parse_and_validate(response, attractions)
+
+        has_data = bool(parsed.get(self.output_key, []))
+
+        print(f"[{self.name}] 解析结果: has_data={has_data}", flush=True)
+        print(
+            f"[{self.name}] 数据预览: {str(parsed.get(self.output_key, []))[:200]}...",
+            flush=True,
+        )
+
+        return self._build_result(response, parsed, state, has_data)
+
+    def _build_messages(self, state: AgentState) -> List[BaseMessage]:
+        """构建输入消息"""
+        system_msg = SystemMessage(content=self.base_prompt)
         user_original = state["messages"][0].content if state.get("messages") else "无"
+        context = self._build_context(state)
+        retry_context = self._build_retry_context(state)
+
+        return [
+            system_msg,
+            HumanMessage(content=f"【用户原始需求】{user_original}"),
+            HumanMessage(content=f"【当前任务上下文】{context}{retry_context}"),
+        ]
+
+    def _build_context(self, state: AgentState) -> str:
+        """构建任务上下文"""
+        city = state.get("city", "未知")
         has_attractions = len(state.get("attractions", [])) > 0
         has_hotels = len(state.get("hotels", [])) > 0
         has_weather = bool(state.get("weather_info"))
 
-        call_count = state.get("agent_call_count", {}).get(self.name, 0)
-        retry_context = ""
-        if call_count > 0:
-            my_errors = [
-                e for e in state.get("errors", []) if e.get("agent") == self.name
-            ]
-            recent_errors = my_errors[-3:] if len(my_errors) >= 3 else my_errors
-            error_lines = []
-            if recent_errors:
-                for e in recent_errors:
-                    err_msg = e.get("error", "")[:200]
-                    error_lines.append(f"- ❌ {err_msg}")
-            retry_context = (
-                f"\n【重试说明 - 第{call_count + 1}次尝试】\n"
-                + "之前执行失败记录：\n"
-                + "\n".join(error_lines)
-            )
+        context = (
+            f"目的地: {city}, "
+            f"交通方式: {state.get('transportation', '未知')}, "
+            f"住宿偏好: {state.get('accommodation', '未知')}, "
+            f"旅行日期: {state.get('start_date', '未知')} 至 {state.get('end_date', '未知')} ({state.get('travel_days', 0)}天), "
+            f"已获取景点: {'是' if has_attractions else '否'}, "
+            f"已获取酒店: {'是' if has_hotels else '否'}, "
+            f"已获取天气: {'是' if has_weather else '否'}"
+        )
 
-        agent_specific_context = ""
-        if self.name == "route_agent":
-            attractions = state.get("attractions", [])
-            if attractions:
-                places = []
-                for a in attractions:
-                    name = a.get("name", "未知景点")
-                    lon = a.get("longitude") or (a.get("location") or {}).get(
-                        "longitude"
-                    )
-                    lat = a.get("latitude") or (a.get("location") or {}).get("latitude")
+        context_builder = self.config.get("context_builder")
+        if context_builder:
+            context += context_builder(self, state)
 
-                    if lon and lat:
-                        places.append(
-                            f"- {name}：坐标 {lon},{lat}（调用工具时origin/destination必须用此坐标）"
-                        )
-                    else:
-                        logger.warning(
-                            f"[route_agent] 景点 {name} 缺少坐标，跳过路线规划"
-                        )
+        return context
 
-                if places:
-                    agent_specific_context = (
-                        f"\n【重要路线规划数据】\n"
-                        f"以下是景点的精确坐标，调用 maps_direction_walking 等工具时，\n"
-                        f"origin 和 destination 参数必须使用'经度,纬度'格式的数字坐标，\n"
-                        f"绝对不能使用景点名称或地址文字：\n" + "\n".join(places)
-                    )
-                else:
-                    agent_specific_context = "\n【警告】景点数据缺少坐标信息，无法进行路线规划，请返回空路线。"
-            else:
-                agent_specific_context = (
-                    "\n【警告】当前还未获取到任何景点数据，请直接返回空路线结果。"
+    def _build_route_coordinates(self, state: AgentState) -> str:
+        """route_agent 专用：构建坐标上下文"""
+        attractions = state.get("attractions", [])
+        if not attractions:
+            return "\n【警告】当前还未获取到任何景点数据，请直接返回空路线结果。"
+
+        places = []
+        for a in attractions:
+            name = a.get("name", "未知景点")
+            lon = a.get("longitude") or (a.get("location") or {}).get("longitude")
+            lat = a.get("latitude") or (a.get("location") or {}).get("latitude")
+
+            if lon and lat:
+                places.append(
+                    f"- {name}：坐标 {lon},{lat}（调用工具时origin/destination必须用此坐标）"
                 )
+            else:
+                logger.warning(f"[route_agent] 景点 {name} 缺少坐标，跳过路线规划")
 
-        pruned_messages = [
-            system_msg,
-            HumanMessage(content=f"【用户原始需求】{user_original}"),
-            HumanMessage(
-                content=f"【当前任务上下文】"
-                f"目的地: {city}, "
-                f"交通方式: {state.get('transportation', '未知')}, "
-                f"住宿偏好: {state.get('accommodation', '未知')}, "
-                f"旅行日期: {state.get('start_date', '未知')} 至 {state.get('end_date', '未知')} ({state.get('travel_days', 0)}天), "
-                f"已获取景点: {'是' if has_attractions else '否'}, "
-                f"已获取酒店: {'是' if has_hotels else '否'}, "
-                f"已获取天气: {'是' if has_weather else '否'}"
-                f"{agent_specific_context}"
-                f"{retry_context}"
-            ),
-        ]
-        invoke_state = {"messages": pruned_messages}
+        if places:
+            return (
+                f"\n【重要路线规划数据】\n"
+                f"以下是景点的精确坐标，调用 maps_direction_walking 等工具时，\n"
+                f"origin 和 destination 参数必须使用'经度,纬度'格式的数字坐标，\n"
+                f"绝对不能使用景点名称或地址文字：\n" + "\n".join(places)
+            )
+        else:
+            return "\n【警告】景点数据缺少坐标信息，无法进行路线规划，请返回空路线。"
 
-        response = await self.agent.ainvoke(invoke_state)
+    def _build_retry_context(self, state: AgentState) -> str:
+        """构建重试上下文"""
+        call_count = state.get("agent_call_count", {}).get(self.name, 0)
+        if call_count == 0:
+            return ""
 
+        my_errors = [e for e in state.get("errors", []) if e.get("agent") == self.name]
+        recent_errors = my_errors[-3:] if len(my_errors) >= 3 else my_errors
+
+        if not recent_errors:
+            return ""
+
+        error_lines = []
+        for e in recent_errors:
+            err_msg = e.get("error", "")[:200]
+            error_lines.append(f"- ❌ {err_msg}")
+
+        return (
+            f"\n【重试说明 - 第{call_count + 1}次尝试】\n"
+            + "之前执行失败记录：\n"
+            + "\n".join(error_lines)
+        )
+
+    def _parse_and_validate(self, response: dict, attractions: list) -> dict:
+        """解析响应并验证"""
         final_text = self._parse_response(response)
 
         if not final_text:
             logger.warning(f"[{self.name}] 空响应")
-            parsed = {}
-        else:
-            parsed = parse_agent_output(final_text)
+            return {}
 
-        # route_agent 数据验证：过滤不在 attractions 列表中的地点
+        parsed = parse_agent_output(final_text)
+
         if self.name == "route_agent":
-            attractions = state.get("attractions", [])
             valid_names = {a.get("name", "") for a in attractions if a.get("name")}
             routes = parsed.get(self.output_key, [])
             valid_routes = [
@@ -381,22 +439,32 @@ class BaseWorker:
                 )
             parsed[self.output_key] = valid_routes
 
-        has_data = bool(parsed.get(self.output_key, []))
+        if self.validator:
+            output_key = self.output_key
+            items = parsed.get(output_key, [])
+            if isinstance(items, list):
+                validated_items = []
+                for item in items:
+                    if isinstance(item, dict):
+                        try:
+                            validated = self.validator(item)
+                            validated_items.append(validated)
+                        except Exception as e:
+                            logger.warning(f"[{self.name}] validator 失败: {e}")
+                    else:
+                        validated_items.append(item)
+                parsed[output_key] = validated_items
 
-        print(
-            f"[{self.name}] 解析结果: has_data={has_data}",
-            flush=True,
-        )
-        print(
-            f"[{self.name}] 数据预览: {str(parsed.get(self.output_key, []))[:200]}...",
-            flush=True,
-        )
+        return parsed
 
+    def _build_result(
+        self, response: dict, parsed: dict, state: AgentState, has_data: bool
+    ) -> Dict[str, Any]:
+        """构建返回字典"""
         agent_results = self._update_agent_results(state, success=has_data)
         call_count = self._update_call_count(state)
 
         result_data = parsed.get(self.output_key, [])
-
         if not isinstance(result_data, list):
             result_data = []
 
@@ -443,6 +511,7 @@ class WorkerExecutor:
                 base_prompt=config["prompt"],
                 tools=tools,
                 output_key=config["output_key"],
+                config=config,
             )
 
         logger.info(
