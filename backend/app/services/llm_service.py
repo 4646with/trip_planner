@@ -38,6 +38,7 @@ def get_llm():
     settings = get_settings()
 
     provider = os.getenv("LLM_PROVIDER", "zhipu").lower()
+    is_kimi = False
 
     if provider == "gemini":
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY")
@@ -51,6 +52,7 @@ def get_llm():
         model = os.getenv("GEMINI_MODEL") or os.getenv(
             "LLM_MODEL_ID", "gemini-2.0-flash"
         )
+        default_temp = 0.7
         print(f"[LLM] 使用 Gemini: {model}")
     else:
         api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
@@ -58,15 +60,23 @@ def get_llm():
             raise ValueError("未找到 LLM_API_KEY，请检查 .env 配置文件！")
         base_url = os.getenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
         model = os.getenv("LLM_MODEL_ID", "glm-4-flash")
-        print(f"[LLM] 使用智谱AI: {model}")
+        is_kimi = "kimi" in model.lower() or "moonshot" in model.lower()
+        default_temp = 0.6 if is_kimi else 0.7
+        print(f"[LLM] 使用智谱AI/Kimi: {model}, temperature={default_temp}")
+
+    extra_body = None
+    if is_kimi:
+        extra_body = {"thinking": {"type": "disabled"}}
+        print(f"[LLM] 禁用 {model} 的思考功能")
 
     llm = ChatOpenAI(
         api_key=SecretStr(api_key),
         base_url=base_url,
         model=model,
-        temperature=0.7,
+        temperature=default_temp,
         max_retries=3,
         timeout=120,
+        extra_body=extra_body,
     )
 
     return llm

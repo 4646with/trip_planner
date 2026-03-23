@@ -342,15 +342,29 @@ class BaseWorker:
                 places = []
                 for a in attractions:
                     name = a.get("name", "未知景点")
-                    loc = (
-                        a.get("location") or f"{a.get('longitude')},{a.get('latitude')}"
+                    lon = a.get("longitude") or (a.get("location") or {}).get(
+                        "longitude"
                     )
-                    places.append(f"- {name} (坐标: {loc})")
-                agent_specific_context = (
-                    f"\n【重要路线规划数据】\n"
-                    f"用户已确定的途经景点如下：\n" + "\n".join(places) + "\n"
-                    f"请严格根据以上景点，规划它们之间的合理交通路线。"
-                )
+                    lat = a.get("latitude") or (a.get("location") or {}).get("latitude")
+
+                    if lon and lat:
+                        places.append(
+                            f"- {name}：坐标 {lon},{lat}（调用工具时origin/destination必须用此坐标）"
+                        )
+                    else:
+                        logger.warning(
+                            f"[route_agent] 景点 {name} 缺少坐标，跳过路线规划"
+                        )
+
+                if places:
+                    agent_specific_context = (
+                        f"\n【重要路线规划数据】\n"
+                        f"以下是景点的精确坐标，调用 maps_direction_walking 等工具时，\n"
+                        f"origin 和 destination 参数必须使用'经度,纬度'格式的数字坐标，\n"
+                        f"绝对不能使用景点名称或地址文字：\n" + "\n".join(places)
+                    )
+                else:
+                    agent_specific_context = "\n【警告】景点数据缺少坐标信息，无法进行路线规划，请返回空路线。"
             else:
                 agent_specific_context = (
                     "\n【警告】当前还未获取到任何景点数据，请直接返回空路线结果。"
@@ -380,6 +394,24 @@ class BaseWorker:
         print(f"[{self.name}] 原始返回: {final_text[:500]}...", flush=True)
 
         parsed = parse_agent_output(final_text)
+
+        # route_agent 数据验证：过滤不在 attractions 列表中的地点
+        if self.name == "route_agent":
+            attractions = state.get("attractions", [])
+            valid_names = {a.get("name", "") for a in attractions if a.get("name")}
+            routes = parsed.get(self.output_key, [])
+            valid_routes = [
+                r
+                for r in routes
+                if r.get("origin") in valid_names
+                and r.get("destination") in valid_names
+            ]
+            if len(valid_routes) < len(routes):
+                print(
+                    f"[{self.name}] 过滤幻觉路线: {len(routes) - len(valid_routes)} 条",
+                    flush=True,
+                )
+            parsed[self.output_key] = valid_routes
 
         has_data = bool(parsed.get(self.output_key, []))
 
@@ -482,17 +514,17 @@ def _extract_planner_fields(items: list, max_items: int = 5) -> list:
     """
     # Planner 生成行程时真正需要的字段，其他字段是 Worker 内部使用的
     ESSENTIAL_KEYS = {
-        "name",           # 景点/酒店名称，必须
-        "address",        # 地址，用于地图标注
-        "location",       # 经纬度，用于地图标注
-        "visit_duration", # 建议游览时长，用于时间安排
-        "description",    # 描述，用于生成行程文案
-        "category",       # 类别，用于分类展示
-        "ticket_price",   # 门票价格，用于预算计算
-        "rating",         # 评分，用于质量判断
+        "name",  # 景点/酒店名称，必须
+        "address",  # 地址，用于地图标注
+        "location",  # 经纬度，用于地图标注
+        "visit_duration",  # 建议游览时长，用于时间安排
+        "description",  # 描述，用于生成行程文案
+        "category",  # 类别，用于分类展示
+        "ticket_price",  # 门票价格，用于预算计算
+        "rating",  # 评分，用于质量判断
         # 酒店专属字段
-        "price_range",    # 价格区间，用于预算计算
-        "distance",       # 距景点距离，用于推荐理由
+        "price_range",  # 价格区间，用于预算计算
+        "distance",  # 距景点距离，用于推荐理由
     }
 
     cleaned = []
@@ -530,13 +562,9 @@ class Planner:
         attractions_context = _extract_planner_fields(
             state.get("attractions", []), max_items=5
         )
-        hotels_context = _extract_planner_fields(
-            state.get("hotels", []), max_items=3
-        )
+        hotels_context = _extract_planner_fields(state.get("hotels", []), max_items=3)
         weather_context = state.get("weather_info", [])  # 天气数据本身就很小，无需清洗
-        routes_context = _extract_planner_fields(
-            state.get("routes", []), max_items=5
-        )
+        routes_context = _extract_planner_fields(state.get("routes", []), max_items=5)
 
         logger.info(
             f"Planner 清洗后数据量: "
@@ -555,9 +583,28 @@ class Planner:
         special_requirements = intent.get("special_requirements", [])
         budget_level = intent.get("budget_level", "unknown")
         hotel_intent = intent.get("hotel_intent", "unknown")
+        itinerary_style = intent.get("itinerary_style", "relaxed")
+        hard_constraints = intent.get("hard_constraints", [])
 
         preferences_str = ", ".join(preferences) if preferences else "无"
-        special_req_str = ", ".join(special_requirements) if special_requirements else "无"
+        special_req_str = (
+            ", ".join(special_requirements) if special_requirements else "无"
+        )
+
+        # 地理临近性约束（compact模式强制执行）
+        if itinerary_style == "compact":
+            geo_constraint = "【地理约束 - 强制】所有景点必须在步行15分钟或单次地铁可达范围内，不得安排跨越城市对角线的景点组合。优先选择同一商圈/区域内的景点。"
+        else:
+            geo_constraint = ""
+
+        # 硬性约束（用户明确表达的所有具体要求）
+        constraints_block = ""
+        if hard_constraints:
+            constraints_str = "\n".join(f"- {c}" for c in hard_constraints)
+            constraints_block = f"""
+⚠️【用户硬性约束 - 必须严格执行，不得忽略或替换】
+{constraints_str}
+"""
 
         # ── 第三步：构建 Planner 的输入消息 ────────────────────────
         planner_messages = [
@@ -576,18 +623,27 @@ class Planner:
 
 【用户意图（请严格遵守）】
 住宿需求: {
-    "用户明确不需要订酒店，请勿安排酒店费用" if hotel_intent == "skip"
-    else "用户需要订酒店，请根据住宿偏好推荐"
-}
+                    "用户明确不需要订酒店，请勿安排酒店费用"
+                    if hotel_intent == "skip"
+                    else "用户需要订酒店，请根据住宿偏好推荐"
+                }
 预算水平: {budget_level}
 特殊需求: {special_req_str}
-{"（注意：有特殊需求，请在行程安排和建议中体现，例如选择无障碍设施、避免长途步行等）" if special_requirements else ""}
+{
+                    "（注意：有特殊需求，请在行程安排和建议中体现，例如选择无障碍设施、避免长途步行等）"
+                    if special_requirements
+                    else ""
+                }
+
+{geo_constraint}
+
+{constraints_block}
 
 【结构化数据（已清洗，字段完整）】
 景点数据:
 {json.dumps(attractions_context, ensure_ascii=False)}
 
-天气数据:
+天气数据（共{len(weather_context)}条，必须全部写入 weather_info 字段，不得省略）:
 {json.dumps(weather_context, ensure_ascii=False)}
 
 酒店数据:
@@ -619,6 +675,7 @@ class Planner:
     def get_node(self):
         async def planner_node(state: AgentState) -> Dict[str, Any]:
             return await self.generate(state)
+
         return planner_node
 
 

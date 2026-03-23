@@ -46,8 +46,20 @@ class TextSearchToolInput(BaseModel):
 
 
 class DirectionToolInput(BaseModel):
-    origin: str = Field(..., description="起点地址")
-    destination: str = Field(..., description="终点地址")
+    origin: str = Field(
+        ...,
+        description=(
+            "起点坐标，格式必须是'经度,纬度'，例如'113.9448,22.4837'。"
+            "绝对不能传地址名称或景点名称，必须是数字坐标。"
+        ),
+    )
+    destination: str = Field(
+        ...,
+        description=(
+            "终点坐标，格式必须是'经度,纬度'，例如'113.9774,22.5376'。"
+            "绝对不能传地址名称或景点名称，必须是数字坐标。"
+        ),
+    )
     city: str = Field(..., description="城市名称")
 
 
@@ -68,6 +80,10 @@ _SCHEMA_MAPPING: Dict[str, type] = {
     "maps_direction_bicycling": DirectionToolInput,
     "maps_search_detail": SearchDetailToolInput,
 }
+
+# 全局信号量：限制同时进行的高德API调用数量
+# 高德免费版QPS限制约为2-3，这里保守设为2
+_AMAP_SEMAPHORE = asyncio.Semaphore(2)
 
 
 def register_tool_schemas(extra_schemas: Dict[str, type]) -> None:
@@ -91,27 +107,36 @@ def create_tool_wrapper(
     """
 
     async def wrapper(**kwargs) -> str:
-        # 记录调用参数（用于测试验证）
-        logger.info(f"[{tool_name}] 调用参数: {kwargs}")
-        last_error: Optional[Exception] = Exception("未知错误")
-        for attempt in range(1, max_retries + 1):
-            try:
-                return await mcp_tool.ainvoke(kwargs)
-            except Exception as e:
-                last_error = e
-                if attempt < max_retries:
-                    logger.warning(
-                        f"[{tool_name}] 调用失败 ({attempt}/{max_retries}): "
-                        f"{str(e)[:100]}，{retry_delay}s 后重试..."
-                    )
-                    await asyncio.sleep(retry_delay)
-                else:
-                    logger.error(
-                        f"[{tool_name}] 已重试 {max_retries} 次，全部失败: {e}"
-                    )
-        if last_error:
-            raise last_error
-        raise RuntimeError(f"[{tool_name}] 调用失败")
+        async with _AMAP_SEMAPHORE:
+            logger.info(f"[{tool_name}] 调用参数: {kwargs}")
+            last_error: Optional[Exception] = Exception("未知错误")
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return await mcp_tool.ainvoke(kwargs)
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e)
+                    if "CUQPS_HAS_EXCEEDED" in error_str:
+                        wait_time = 2.0 * attempt
+                        logger.warning(
+                            f"[{tool_name}] 高德API并发超限，"
+                            f"等待{wait_time}s后重试 ({attempt}/{max_retries})"
+                        )
+                        await asyncio.sleep(wait_time)
+                        continue
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"[{tool_name}] 调用失败 ({attempt}/{max_retries}): "
+                            f"{error_str[:100]}，{retry_delay}s 后重试..."
+                        )
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        logger.error(
+                            f"[{tool_name}] 已重试 {max_retries} 次，全部失败: {e}"
+                        )
+            if last_error:
+                raise last_error
+            raise RuntimeError(f"[{tool_name}] 调用失败")
 
     return StructuredTool(
         name=tool_name,
