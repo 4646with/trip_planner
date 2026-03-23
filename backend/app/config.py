@@ -50,10 +50,6 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4"
 
-    # Gemini 配置 (通过 LLM_PROVIDER=gemini 启用)
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
-
     # 日志配置
     log_level: str = "INFO"
 

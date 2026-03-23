@@ -489,13 +489,7 @@ class WorkerExecutor:
         self._manager = AgentFactory(llm)
         self._workers: Dict[str, BaseWorker] = {}
 
-        import os
-
-        _provider = os.getenv("LLM_PROVIDER", "").lower()
-        if _provider == "gemini":
-            print(f"[WorkerExecutor] Gemini 模式，并发限制: 1")
-        else:
-            print(f"[WorkerExecutor] 智谱AI模式，并发限制: {max_concurrency}")
+        print(f"[WorkerExecutor] 初始化完成，并发限制: {max_concurrency}")
 
         for agent_id, config in AGENT_REGISTRY.items():
             tools = list(get_mcp_manager().get_tools_by_names(config["tools"]))
