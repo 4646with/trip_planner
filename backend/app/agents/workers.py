@@ -9,7 +9,6 @@
 import asyncio
 import json
 import logging
-import re
 from functools import wraps
 from typing import Dict, List, Any, Optional
 
@@ -417,35 +416,6 @@ class BaseWorker:
             context += context_builder(self, state)
 
         return context
-
-    def _build_route_coordinates(self, state: AgentState) -> str:
-        """route_agent 专用：构建坐标上下文"""
-        attractions = state.get("attractions", [])
-        if not attractions:
-            return "\n【警告】当前还未获取到任何景点数据，请直接返回空路线结果。"
-
-        places = []
-        for a in attractions:
-            name = a.get("name", "未知景点")
-            lon = a.get("longitude") or (a.get("location") or {}).get("longitude")
-            lat = a.get("latitude") or (a.get("location") or {}).get("latitude")
-
-            if lon and lat:
-                places.append(
-                    f"- {name}：坐标 {lon},{lat}（调用工具时origin/destination必须用此坐标）"
-                )
-            else:
-                logger.warning(f"[route_agent] 景点 {name} 缺少坐标，跳过路线规划")
-
-        if places:
-            return (
-                f"\n【重要路线规划数据】\n"
-                f"以下是景点的精确坐标，调用 maps_direction_walking 等工具时，\n"
-                f"origin 和 destination 参数必须使用'经度,纬度'格式的数字坐标，\n"
-                f"绝对不能使用景点名称或地址文字：\n" + "\n".join(places)
-            )
-        else:
-            return "\n【警告】景点数据缺少坐标信息，无法进行路线规划，请返回空路线。"
 
     def _build_retry_context(self, state: AgentState) -> str:
         """构建重试上下文"""
