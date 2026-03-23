@@ -17,7 +17,8 @@ from ..models.schemas import TripRequest, TripPlan
 from ..services.mcp_tools import initialize_mcp_tools, cleanup_mcp_tools
 from .intent_analyzer import IntentAnalyzer
 from .supervisor import Supervisor
-from .workers import WorkerExecutor as WorkerManager, Planner, get_agent_registry
+from .workers import WorkerExecutor as WorkerManager, get_agent_registry
+from .planner import Planner
 from .graph.builder import GraphBuilder
 from .utils.parsers import parse_and_build_plan_async
 from .utils.trip_store import get_trip_plan_store
