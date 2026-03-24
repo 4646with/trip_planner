@@ -15,7 +15,7 @@ from typing import Dict, Any, List
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .schemas.state import AgentState
 from ..services.mcp_tools import get_mcp_manager, AmapTools
@@ -47,18 +47,15 @@ def create_enhanced_web_search(agent_type: str) -> StructuredTool:
             logger.error(f"[web_search] 失败: {e}")
             return ""
 
-    enhanced_schema = type(
-        "EnhancedWebSearchInput",
-        (BaseModel,),
-        {"query": (str, ...), "__annotations__": {"query": str}},
-    )
+    class EnhancedWebSearchInput(BaseModel):
+        query: str = Field(..., description="搜索查询")
 
     return StructuredTool(
         name="web_search",
         description=original_web_search.description,
         func=None,
         coroutine=enhanced_web_search,
-        args_schema=enhanced_schema,
+        args_schema=EnhancedWebSearchInput,
     )
 
 
@@ -71,13 +68,15 @@ def with_retry_and_log(func):
         logger.info(f"[{agent_name}] 开始执行...")
 
         max_retries = 1
+        last_error = None
+        
         for attempt in range(1, max_retries + 1):
             try:
                 result = await func(state, *args, **kwargs)
                 logger.info(f"[{agent_name}] 执行成功")
                 return result
-            except Exception as e:
-                error_str = str(e)
+            except Exception as last_error:
+                error_str = str(last_error)
                 if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
                     wait_match = regex_module.search(r"retry in ([\d.]+)s", error_str)
                     wait_time = float(wait_match.group(1)) + 1 if wait_match else 10.0
@@ -99,7 +98,7 @@ def with_retry_and_log(func):
             "errors": [
                 {
                     "agent": f"{agent_name}_agent",
-                    "error": f"执行失败: {str(e)}",
+                    "error": f"执行失败: {str(last_error)}" if last_error else "未知错误",
                     "fatal": False,
                 }
             ],
