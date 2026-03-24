@@ -119,6 +119,10 @@ class MapAgentsSystem:
 
         return result
 
+    async def plan_trip_async(self, request: TripRequest) -> TripPlan:
+        """plan_trip 的别名，保持向后兼容"""
+        return await self.plan_trip(request)
+
     @property
     def is_initialized(self) -> bool:
         """检查系统是否已初始化"""
