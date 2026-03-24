@@ -25,7 +25,7 @@ from .schemas.state import AgentState, RouteDecision
 from .prompts.agents import AgentPrompts
 
 # 工具（如需扩展）
-from .workers import WorkerExecutor as WorkerManager
+from .workers import WORKER_NODES
 from .planner import Planner
 from .supervisor import Supervisor
 
@@ -41,7 +41,7 @@ __all__ = [
     # 提示词
     "AgentPrompts",
     # 组件（高级使用）
-    "WorkerManager",
+    "WORKER_NODES",
     "Planner",
     "Supervisor",
 ]
