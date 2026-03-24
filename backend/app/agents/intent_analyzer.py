@@ -17,80 +17,84 @@ from .schemas.state import AgentState, TripIntent
 logger = logging.getLogger(__name__)
 
 
-INTENT_PROMPT = """你是旅行意图分析专家。你的唯一任务是从用户的输入中提取结构化的意图信息。
+INTENT_PROMPT = """
+你是旅行意图结构化引擎，职责有两个：
+1. 从用户输入中提取结构化意图字段
+2. 为下游 Agent 生成执行指令
 
-【核心规则 - 必须遵守】
+━━━━━━━━━━━━━━━━━━━━━━━━
+【全局优先级】自由文本 > 表单选项
+用户在自由文本中的表达是最后意图，永远覆盖表单选项。
+存在矛盾时：has_conflict=True，conflict_note 说明冲突内容和采用决策。
+━━━━━━━━━━━━━━━━━━━━━━━━
 
-规则1：自由文本的优先级 > 表单选项
-用户在自由文本里说"住哥哥家"，即使表单选了"豪华型酒店"，hotel_intent也必须是"skip"。
-自由文本是用户更主动、更后置的表达，永远优先。
+【规则 R1】hotel_intent 三级判断
 
-规则2：hotel_intent的三级状态判断
-- "skip"：用户明确表达不需要订酒店
-  触发词例子："住哥哥家"、"住朋友家"、"有亲戚接待"、"不用订酒店"、"自己解决住宿"
-- "need"：用户明确需要，或表单选了酒店类型且无冲突
-- "unknown"：完全没有提到住宿，保守处理（系统会默认按need处理）
+| 值        | 判断条件                                     | 典型触发表达                        |
+|-----------|----------------------------------------------|-------------------------------------|
+| "skip"    | 用户明确不需要订酒店                         | "住哥哥家"、"朋友接待"、"自己解决住宿" |
+| "need"    | 用户明确需要，或表单选了酒店类型且无冲突     | —                                   |
+| "unknown" | 完全未提及住宿（系统默认按 need 处理）       | —                                   |
 
-规则3：given_attractions的判断标准
-只有用户明确说"要去XX地方"才算。偏好标签（如"历史文化"）不能推断为具体景点。
-例如："想去故宫和颐和园" → ["故宫", "颐和园"] ✅
-例如："喜欢历史文化" → [] ✅（不能推断出具体景点）
+【规则 R2】given_attractions —— 只提取明确表达的景点
+✅ "想去故宫和颐和园" → ["故宫", "颐和园"]
+❌ "喜欢历史文化" → []（偏好≠具体景点）
 
-规则4：special_requirements必须用语义理解，不能用关键词匹配
-"我外婆要来" → ["携带老人"] ✅（"外婆"不是关键词"老人"，但语义上是）
-"带着娃" → ["亲子游"] ✅
-"妈妈腿脚不好" → ["携带老人", "无障碍需求"] ✅
+【规则 R3】special_requirements —— 语义理解，禁止关键词匹配
+✅ "外婆要来" → ["携带老人"]
+✅ "带着娃" → ["亲子游"]
+✅ "妈妈腿脚不好" → ["携带老人", "无障碍需求"]
 
-规则5：冲突检测
-当自由文本和表单选项矛盾时，设has_conflict=True，并在conflict_note中说明冲突内容和采用的决策。
+【规则 R4】hard_constraints —— 提取排他性，强意志表达
+判断标准：用户是否使用了排他性语气 + 具体对象
+✅ "我要吃老碗会" → 提取（排他性强）
+❌ "想吃点好吃的" → 不提取（泛泛偏好，反映在 travel_style）
+✅ "第一天必须轻松" → 提取
+❌ "偏好休闲" → 不提取
 
-规则6：hard_constraints 提取原则
-用户输入中任何带有强烈个人意志的具体要求，无论类型是餐厅、景点、活动还是节奏偏好，都应该提炼成一条自然语言约束存入 hard_constraints。
-关键判断标准是"用户有没有用排他性语气"——
-"我要吃老碗会"比"我想吃点好吃的"强烈，前者提取，后者不提取。
-"第一天必须轻松"比"偏好休闲"强烈，前者提取，后者反映在 travel_style 里就够了。
+【规则 R5】pre_selected_* —— 排他性语气 + 具体名称时锁定
 
-规则7：前置锁定实体提取（pre_selected_* 字段）
-当用户使用排他性语气并跟具体名称时，提取到对应字段：
+| 字段                      | 锁定数量 | 触发词示例                                     |
+|---------------------------|----------|------------------------------------------------|
+| pre_selected_hotel        | 唯一     | "就住XX"、"必须住XX"、"已经订了XX"             |
+| pre_selected_attractions  | 多个     | "就去这几个"、"其他不用安排"                   |
+| pre_selected_restaurants  | 多个     | "就去那家XX"、"必须吃XX"                       |
 
-【酒店 - pre_selected_hotel】（完全锁定，只有一个）
-触发词："就住XX"、"必须住XX"、"已经订了XX"、"就定XX"
-酒店只能锁定一家，直接填字符串。
-例："我一定要住全季酒店" → pre_selected_hotel: "全季酒店"
+注：填了 pre_selected_attractions → need_attraction_search 设为 False
 
-【景点 - pre_selected_attractions】（部分锁定，可能多个）
-触发词："就去这两个地方"、"行程就安排这几个"、"其他不要安排"
-景点可能锁定多个，填字符串列表。
-例："我就去故宫和颐和园，其他不用安排了" → pre_selected_attractions: ["故宫", "颐和园"]
-注意：填了 pre_selected_attractions 后，need_attraction_search 应设为 False。
+【规则 R6】agent_instructions —— 将用户限制转化为下游执行指令
 
-【餐厅 - pre_selected_restaurants】（部分锁定，可能多个】
-触发词："就去那家老碗会"、"必须吃XX餐厅"
-例："就去老碗会吃饭" → pre_selected_restaurants: ["老碗会"]
-
-【战术指令规则 - 你是项目经理，要给下游 Agent 发指令】
-如果用户有特定的地理限制或人群限制，必须将其转化为对特定 Agent 的指令：
-
-1. 地理限制 → 给 attraction/hotel 的指令：
-   - 用户说"住朝阳区哥哥家" → attraction 指令："必须以朝阳区为中心推荐景点"
-   - 用户说"想住海边" → hotel 指令："优先搜索海边/海滨区域酒店"
-
-2. 人群限制 → 给 attraction 的指令：
-   - 用户说"带老人" → attraction 指令："必须推荐平缓、不需要爬山的休闲景点"
-   - 用户说"亲子游" → attraction 指令："优先推荐适合儿童、互动性强的景点"
-   - 用户说"腿脚不好" → attraction 指令："选择无需爬坡、设施完善的景点"
-
-3. 特殊偏好 → 给对应 Agent：
-   - 用户说"想吃地道美食" → restaurant 指令："搜索当地人常去的老字号餐厅"
+| 用户表达类型   | 目标 Agent      | 指令示例                                     |
+|----------------|-----------------|----------------------------------------------|
+| 地理限制       | attraction/hotel | "必须以朝阳区为中心推荐景点"                 |
+| 携带老人       | attraction      | "推荐平缓、无需爬山的休闲景点"               |
+| 亲子游         | attraction      | "优先推荐适合儿童、互动性强的景点"           |
+| 腿脚不便       | attraction      | "选择无需爬坡、设施完善的景点"               |
+| 地道美食偏好   | restaurant      | "搜索当地人常去的老字号餐厅"                 |
 
 指令填写规则：
-- 每条指令不超过 50 字
-- 如果没有特殊限制，指令留空字符串 ""
-- 指令是给 Agent 看的，执行时会注入到 Agent 的 system prompt 中
+- 每条不超过 50 字
+- 无特殊限制时留空字符串 ""
+- 指令会直接注入目标 Agent 的 system prompt
 
-【输出要求】
-严格按照JSON schema输出，不要输出任何额外文字或markdown标记。
+━━━━━━━━━━━━━━━━━━━━━━━━
+【输出要求】严格按 JSON schema 输出，不输出任何额外文字或 markdown 标记。
+━━━━━━━━━━━━━━━━━━━━━━━━
 """
+
+
+def _resolve_itinerary_style(travel_days: int, hard_constraints: list[str]) -> str:
+    """
+    决定行程节奏。
+    优先尊重用户在 hard_constraints 中的明确节奏要求；
+    否则按天数自动判断：≤2天紧凑，>2天舒缓。
+    """
+    constraints_text = " ".join(hard_constraints or [])
+    if any(kw in constraints_text for kw in ("轻松", "慢", "悠闲", "不赶")):
+        return "relaxed"
+    if any(kw in constraints_text for kw in ("紧凑", "多跑", "塞满", "效率")):
+        return "compact"
+    return "compact" if travel_days <= 2 else "relaxed"
 
 
 class IntentAnalyzer:
@@ -106,28 +110,23 @@ class IntentAnalyzer:
     """
 
     def __init__(self, llm):
-        # with_structured_output 强制LLM输出符合TripIntent schema的JSON
-        # 这样我们永远不需要手动解析LLM的输出
         self.structured_llm = llm.with_structured_output(TripIntent)
 
     async def analyze(self, state: AgentState) -> Dict[str, Any]:
         """
-        分析用户意图，将结果写入state["trip_intent"。
+        分析用户意图，将结果写入 state["trip_intent"]。
 
         这是整个系统唯一一次"理解用户说了什么"的LLM调用。
-        之后所有节点都读取 state["trip_intent"，不再重复推断。
+        之后所有节点都读取 state["trip_intent"]，不再重复推断。
         """
         rid = state.get("request_id", "unknown")
 
-        # 如果已经分析过，直接跳过
         if state.get("trip_intent"):
             logger.info(f"[{rid}] 意图已分析，跳过")
             return {}
 
         logger.info(f"[{rid}] 开始分析用户意图...")
 
-        # 构建输入消息：同时提供表单数据和自由文本
-        # 这样LLM能检测到两者之间的冲突
         user_context = HumanMessage(
             content=f"""
 请分析以下用户的旅行请求，提取结构化意图。
@@ -156,7 +155,6 @@ class IntentAnalyzer:
                 ]
             )
 
-            # 记录关键决策，方便调试
             logger.info(
                 f"[{rid}] 意图分析完成 | "
                 f"hotel_intent={intent.hotel_intent} | "
@@ -168,45 +166,43 @@ class IntentAnalyzer:
             if intent.has_conflict:
                 logger.warning(f"[{rid}] 检测到冲突: {intent.conflict_note}")
 
-            # 确定性规则：设置行程节奏（不需要LLM，直接计算）
             travel_days = state.get("travel_days", 3)
-            intent.itinerary_style = "compact" if travel_days <= 2 else "relaxed"
+            intent.itinerary_style = _resolve_itinerary_style(
+                travel_days, intent.hard_constraints
+            )
             logger.info(
-                f"[{rid}] 行程节奏判定: travel_days={travel_days} → itinerary_style={intent.itinerary_style}"
+                f"[{rid}] 行程节奏判定: travel_days={travel_days} "
+                f"hard_constraints={intent.hard_constraints} "
+                f"→ itinerary_style={intent.itinerary_style}"
             )
 
-            # 根据意图构建路由决策
-            # 第一梯队：无依赖关系，可以并发
-            first_wave = []
-            if intent.need_attraction_search:
-                first_wave.append("attraction_agent")
-            if intent.need_weather:
-                first_wave.append("weather_agent")
-            # hotel 和 route 是第二梯队，依赖 attractions 数据
-            # 交给 Supervisor 在第一梯队完成后处理
+            first_wave = [
+                agent
+                for agent, needed in [
+                    ("attraction_agent", intent.need_attraction_search),
+                    ("weather_agent", intent.need_weather),
+                ]
+                if needed
+            ]
 
-            # 将结构化意图写入state，供所有后续节点读取
-            if not first_wave:
-                return {
-                    "trip_intent": intent.model_dump(),
-                    "next": "planner_agent",
-                }
+            next_node = "planner_agent" if not first_wave else (
+                first_wave if len(first_wave) > 1 else first_wave[0]
+            )
 
             return {
                 "trip_intent": intent.model_dump(),
-                "next": first_wave if len(first_wave) > 1 else first_wave[0],
+                "next": next_node,
             }
 
         except Exception as e:
             logger.error(f"[{rid}] 意图分析失败: {e}，使用保守默认值")
-            # 失败时使用保守默认值：所有东西都搜，避免漏掉任何信息
             travel_days = state.get("travel_days", 3)
             fallback_intent = TripIntent(
                 hotel_intent="unknown",
                 need_attraction_search=True,
                 need_weather=True,
                 need_route=True,
-                itinerary_style="compact" if travel_days <= 2 else "relaxed",
+                itinerary_style=_resolve_itinerary_style(travel_days, []),
                 reasoning=f"意图分析失败，使用保守默认值。错误: {str(e)}",
             )
             return {
@@ -215,9 +211,6 @@ class IntentAnalyzer:
             }
 
     def get_node(self):
-        """返回可被GraphBuilder使用的节点函数"""
-
         async def intent_node(state: AgentState) -> Dict[str, Any]:
             return await self.analyze(state)
-
         return intent_node
