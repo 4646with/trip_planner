@@ -5,6 +5,7 @@ from typing import Union, List
 
 from langgraph.graph import StateGraph, END
 from langgraph.constants import Send
+from langgraph.constants import START
 
 from ..schemas.state import AgentState
 from ..intent_analyzer import IntentAnalyzer
@@ -52,6 +53,7 @@ def build_trip_graph(llm) -> StateGraph:
         workflow.add_node(worker_name, worker_func)
 
     # 3. 编排边（连线）
+    workflow.add_edge(START, "intent_analyzer")
     workflow.add_edge("intent_analyzer", "supervisor")
 
     # 所有 Worker 节点执行完后，必须回到 supervisor 重新检查状态
