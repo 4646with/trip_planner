@@ -3,15 +3,16 @@
 重构特性：
 1. 彻底移除面向对象基类和注册表
 2. 单次 Tool Calling，0 循环
-3. 保留重试机制、上下文组装与体感搜索增强
+3. 丰富的 Print 日志，开发维护体验拉满
 """
 
 import asyncio
 import json
 import logging
+import sys
 import re as regex_module
 from functools import wraps
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import StructuredTool
@@ -22,9 +23,31 @@ from ..services.mcp_tools import get_mcp_manager, AmapTools
 from .tools import web_search as original_web_search
 from ..services.llm_service import get_llm
 
-logger = logging.getLogger(__name__)
+# ==========================================
+# 专业日志配置 (穿透 Uvicorn 屏蔽，带颜色与时间戳)
+# ==========================================
+logger = logging.getLogger("trip_workers")
+logger.setLevel(logging.INFO)
+
+# 避免 FastAPI 热重载时重复添加 Handler
+if not logger.handlers:
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    # ANSI 颜色转义码：青色时间 | 蓝色模块名 | 绿色/黄色/红色级别
+    formatter = logging.Formatter(
+        fmt="\033[36m%(asctime)s\033[0m | \033[1;34m%(name)s\033[0m | \033[1;32m%(levelname)-7s\033[0m | %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    # 核心：禁止日志冒泡给 Root Logger，防止被 Uvicorn 吃掉
+    logger.propagate = False
 
 llm = get_llm()
+
+# ==========================================
+# 1. 业务增强工具 & 装饰器
+# ==========================================
 
 _WEB_SEARCH_SUFFIXES = {
     "attraction": " 真实体验 避坑 拍照点位 游玩时长",
@@ -33,18 +56,18 @@ _WEB_SEARCH_SUFFIXES = {
 
 
 def create_enhanced_web_search(agent_type: str) -> StructuredTool:
-    """保留：增强版 web_search 工具，自动补全体感类后缀"""
+    """增强版 web_search 工具，自动补全体感类后缀"""
     suffix = _WEB_SEARCH_SUFFIXES.get(agent_type, "")
 
     async def enhanced_web_search(query: str) -> str:
         try:
             enhanced_query = query + suffix
             logger.info(
-                f"[{agent_type}] web_search 增强: '{query}' -> '{enhanced_query}'"
+                f"[{agent_type}] 🔍 web_search 增强: '{query}' -> '{enhanced_query}'"
             )
             return await original_web_search.ainvoke({"query": enhanced_query})
         except Exception as e:
-            logger.error(f"[web_search] 失败: {e}")
+            logger.error(f"[{agent_type}] ❌ web_search 失败: {e}")
             return ""
 
     class EnhancedWebSearchInput(BaseModel):
@@ -60,20 +83,20 @@ def create_enhanced_web_search(agent_type: str) -> StructuredTool:
 
 
 def with_retry_and_log(func):
-    """保留：统一的异常处理和日志装饰器（去除了 self 依赖）"""
+    """统一异常处理和专业日志打印装饰器"""
 
     @wraps(func)
     async def wrapper(state: AgentState, *args, **kwargs):
         agent_name = func.__name__.replace("_node", "")
-        logger.info(f"[{agent_name}] 开始执行...")
+        logger.info(f"[{agent_name}] 🚀 开始执行...")
 
         max_retries = 1
         last_error = None
-        
+
         for attempt in range(1, max_retries + 1):
             try:
                 result = await func(state, *args, **kwargs)
-                logger.info(f"[{agent_name}] 执行成功")
+                logger.info(f"[{agent_name}] ✅ 执行成功，拿到数据！")
                 return result
             except Exception as last_error:
                 error_str = str(last_error)
@@ -81,11 +104,11 @@ def with_retry_and_log(func):
                     wait_match = regex_module.search(r"retry in ([\d.]+)s", error_str)
                     wait_time = float(wait_match.group(1)) + 1 if wait_match else 10.0
                     logger.warning(
-                        f"[{agent_name}] 触发限流，等待 {wait_time:.1f}s (尝试 {attempt}/{max_retries})"
+                        f"[{agent_name}] ⚠️ 触发限流，等待 {wait_time:.1f}s (尝试 {attempt}/{max_retries})"
                     )
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.error(f"[{agent_name}] 执行失败: {error_str[:200]}")
+                    logger.error(f"[{agent_name}] ❌ 执行失败: {error_str[:200]}")
                     break
 
         output_key = "weather_info" if "weather" in agent_name else f"{agent_name}s"
@@ -98,7 +121,9 @@ def with_retry_and_log(func):
             "errors": [
                 {
                     "agent": f"{agent_name}_agent",
-                    "error": f"执行失败: {str(last_error)}" if last_error else "未知错误",
+                    "error": f"执行失败: {str(last_error)}"
+                    if last_error
+                    else "未知错误",
                     "fatal": False,
                 }
             ],
@@ -110,21 +135,21 @@ def with_retry_and_log(func):
 def build_worker_context(
     state: AgentState, worker_type: str, include_intent: bool = True
 ) -> str:
-    """保留：提取后的极简上下文构造器"""
+    """构建极简上下文"""
     city = state.get("city", "未知")
     days = state.get("travel_days", 1)
-    context = f"目的地: {city}，旅行时长: {days}天。\n"
+    context = f"【任务】目的地: {city}，时长: {days}天。\n"
 
     if include_intent:
         intent = state.get("trip_intent", {})
-        context += f"预算级别: {intent.get('budget_level', '未指定')}。\n"
+        context += f"【偏好】预算级别: {intent.get('budget_level', '未指定')}。\n"
         if tactical := intent.get("tactical_instructions", {}).get(worker_type):
             context += f"【🚨 战术约束】: {tactical}\n"
     return context
 
 
 def _safe_parse_json(raw_str: str) -> list:
-    """辅助函数：处理大模型偶尔返回的字符串包裹的 JSON"""
+    """处理大模型返回的 JSON"""
     if isinstance(raw_str, str):
         try:
             parsed = json.loads(raw_str)
@@ -134,9 +159,14 @@ def _safe_parse_json(raw_str: str) -> list:
     return raw_str if isinstance(raw_str, list) else [raw_str]
 
 
+# ==========================================
+# 2. 纯函数节点区
+# ==========================================
+
+
 @with_retry_and_log
 async def hotel_agent_node(state: AgentState) -> Dict[str, Any]:
-    """酒店智能体"""
+    logger.info("🏨 [hotel_agent] 正在向大模型请求搜索参数...")
     tools = list(
         get_mcp_manager().get_tools_by_names(
             [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL]
@@ -155,9 +185,14 @@ async def hotel_agent_node(state: AgentState) -> Dict[str, Any]:
     results = []
     if ai_msg.tool_calls:
         tool_call = ai_msg.tool_calls[0]
+        logger.info(
+            f"🏨 [hotel_agent] 决定调用工具: {tool_call['name']}, 参数: {tool_call['args']}"
+        )
         tool_func = next((t for t in tools if t.name == tool_call["name"]), tools[0])
         raw_res = await tool_func.ainvoke(tool_call["args"])
         results = _safe_parse_json(raw_res)
+    else:
+        logger.warning("🏨 [hotel_agent] 大模型未触发任何工具调用。")
 
     return {
         "hotels": results,
@@ -167,7 +202,7 @@ async def hotel_agent_node(state: AgentState) -> Dict[str, Any]:
 
 @with_retry_and_log
 async def attraction_agent_node(state: AgentState) -> Dict[str, Any]:
-    """景点智能体"""
+    logger.info("🎡 [attraction_agent] 正在向大模型请求搜索参数...")
     tools = list(
         get_mcp_manager().get_tools_by_names(
             [AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL]
@@ -186,9 +221,14 @@ async def attraction_agent_node(state: AgentState) -> Dict[str, Any]:
     results = []
     if ai_msg.tool_calls:
         tool_call = ai_msg.tool_calls[0]
+        logger.info(
+            f"🎡 [attraction_agent] 决定调用工具: {tool_call['name']}, 参数: {tool_call['args']}"
+        )
         tool_func = next((t for t in tools if t.name == tool_call["name"]), tools[0])
         raw_res = await tool_func.ainvoke(tool_call["args"])
         results = _safe_parse_json(raw_res)
+    else:
+        logger.warning("🎡 [attraction_agent] 大模型未触发任何工具调用。")
 
     return {
         "attractions": results,
@@ -201,7 +241,7 @@ async def attraction_agent_node(state: AgentState) -> Dict[str, Any]:
 
 @with_retry_and_log
 async def weather_agent_node(state: AgentState) -> Dict[str, Any]:
-    """天气智能体"""
+    logger.info("⛅ [weather_agent] 正在向大模型请求搜索参数...")
     tools = list(get_mcp_manager().get_tools_by_names([AmapTools.WEATHER]))
     llm_with_tools = llm.bind_tools(tools)
 
@@ -214,7 +254,11 @@ async def weather_agent_node(state: AgentState) -> Dict[str, Any]:
 
     results = []
     if ai_msg.tool_calls:
-        raw_res = await tools[0].ainvoke(ai_msg.tool_calls[0]["args"])
+        tool_call = ai_msg.tool_calls[0]
+        logger.info(
+            f"⛅ [weather_agent] 决定调用工具: {tool_call['name']}, 参数: {tool_call['args']}"
+        )
+        raw_res = await tools[0].ainvoke(tool_call["args"])
         results = _safe_parse_json(raw_res)
 
     return {
@@ -225,14 +269,15 @@ async def weather_agent_node(state: AgentState) -> Dict[str, Any]:
 
 @with_retry_and_log
 async def route_agent_node(state: AgentState) -> Dict[str, Any]:
-    """路线智能体"""
     attractions = state.get("attractions", [])
     if not attractions:
+        logger.warning("🚗 [route_agent] 没有景点数据，跳过路线规划。")
         return {
             "routes": [],
             "agent_call_count": {**state.get("agent_call_count", {}), "route_agent": 1},
         }
 
+    logger.info("🚗 [route_agent] 正在向大模型请求搜索参数...")
     locations = [
         f"{a.get('name', '未知')} ({a.get('location', '位置未知')})"
         for a in attractions[:4]
@@ -257,6 +302,9 @@ async def route_agent_node(state: AgentState) -> Dict[str, Any]:
     results = []
     if ai_msg.tool_calls:
         tool_call = ai_msg.tool_calls[0]
+        logger.info(
+            f"🚗 [route_agent] 决定调用工具: {tool_call['name']}, 参数: {tool_call['args']}"
+        )
         tool_func = next((t for t in tools if t.name == tool_call["name"]), tools[0])
         raw_res = await tool_func.ainvoke(tool_call["args"])
         results = _safe_parse_json(raw_res)
@@ -267,6 +315,9 @@ async def route_agent_node(state: AgentState) -> Dict[str, Any]:
     }
 
 
+# ==========================================
+# 3. 统一导出注册表
+# ==========================================
 WORKER_NODES = {
     "hotel_agent": hotel_agent_node,
     "attraction_agent": attraction_agent_node,
