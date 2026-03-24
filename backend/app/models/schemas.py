@@ -68,14 +68,16 @@ class Attraction(BaseModel):
 
 
 class Meal(BaseModel):
-    """餐饮信息"""
+    """餐饮推荐（区域级别，避免幻觉）"""
 
     type: str = Field(..., description="餐饮类型: breakfast/lunch/dinner/snack")
-    name: str = Field(..., description="餐饮名称")
-    address: str = Field(default="", description="地址")
-    location: Optional[Location] = None  # Moonshot 兼容
-    description: str = Field(default="", description="描述")
-    estimated_cost: int = Field(default=0, description="预估费用(元)")
+    location_hint: str = Field(
+        default="", description="推荐就餐区域，如'陈家祠周边'或'酒店附近步行街'"
+    )
+    style: str = Field(
+        default="", description="餐饮品类/风格，如'粤式早茶'、'平价海鲜'"
+    )
+    price_range: str = Field(default="", description="预估人均价格区间，如'50-80元/人'")
 
 
 class Hotel(BaseModel):

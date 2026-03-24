@@ -16,6 +16,26 @@ from ..models.schemas import TripPlan
 logger = logging.getLogger(__name__)
 
 
+ROUTE_ALIAS_MAP = {
+    "origin": ["origin", "origin_name", "start", "start_point", "起点"],
+    "destination": ["destination", "dest_name", "end", "end_point", "终点"],
+    "transportation": ["transportation", "transit_mode", "mode", "出行方式"],
+    "duration": ["duration", "time", "cost_time", "耗时"],
+    "route_detail": ["route_detail", "steps", "instruction", "路线详情"],
+}
+
+
+def _normalize_route_dict(raw_dict: dict) -> dict:
+    """将任意字典的 Key 归一化为标准 Key"""
+    normalized = {}
+    for standard_key, aliases in ROUTE_ALIAS_MAP.items():
+        for alias in aliases:
+            if alias in raw_dict:
+                normalized[standard_key] = raw_dict[alias]
+                break
+    return normalized
+
+
 ROUTE_ESSENTIAL_KEYS = {
     "origin",
     "destination",
@@ -39,25 +59,30 @@ ESSENTIAL_KEYS = {
 
 
 def _extract_planner_fields(items: list, max_items: int = 5) -> list:
-    """清洗数据，只保留 Planner 需要的字段"""
+    """带归一化容错的数据清洗器"""
     if not items:
         return []
 
     first_item = items[0]
-    if isinstance(first_item, dict) and (
-        "origin" in first_item or "transportation" in first_item
-    ):
-        current_keys = ROUTE_ESSENTIAL_KEYS
-    else:
-        current_keys = ESSENTIAL_KEYS
+    if not isinstance(first_item, dict):
+        return []
+
+    route_identifiers = {"origin", "start", "destination", "end", "transportation"}
+    is_route_data = any(key in first_item for key in route_identifiers)
 
     cleaned = []
     for item in items[:max_items]:
         if not isinstance(item, dict):
             continue
-        cleaned_item = {k: v for k, v in item.items() if k in current_keys}
-        if cleaned_item:
-            cleaned.append(cleaned_item)
+
+        if is_route_data:
+            normalized_item = _normalize_route_dict(item)
+            if normalized_item:
+                cleaned.append(normalized_item)
+        else:
+            cleaned_item = {k: v for k, v in item.items() if k in ESSENTIAL_KEYS}
+            if cleaned_item:
+                cleaned.append(cleaned_item)
 
     return cleaned
 

@@ -1,265 +1,230 @@
-完全正确！你的理解非常精准。我们直接按照 workers → builder → main 的顺序（自下而上）开始重构。
+"""意图分析模块 - 唯一的LLM前置节点
 
-关于你的第二个问题：
-必须保留！ 这些是你项目中非常宝贵的业务资产：
-
-web_search 增强包装：这是极其有价值的“体感提示词工程”（加了“避坑”、“必吃榜”），能大幅提升搜索质量，必须无缝移植过来。
-
-_build_context 逻辑：抽取为全局纯函数 build_worker_context，继续发光发热。
-
-@with_retry_and_log 装饰器：去掉 self 后完美保留，守住系统的稳定性防线。
-
-下面是第一步的完整代码。你可以直接用这段代码完全覆盖现有的 backend/app/agents/workers.py：
-
-🛠️ 步骤一：全新的 workers.py 完整代码
-Python
-
-"""Workers 模块 - 纯函数流水线版
-
-重构特性：
-1. 彻底移除面向对象基类和注册表
-2. 单次 Tool Calling，0 循环
-3. 保留重试机制、上下文组装与体感搜索增强
+核心设计原则：
+- 这是整个系统唯一一个"理解用户说了什么"的地方
+- 它的输出 TripIntent 是所有后续节点的唯一可信来源
+- 后续节点只需读取结构化的 intent state，不需要重新扫描消息历史
 """
 
-import asyncio
-import json
 import logging
-import re as regex_module
-from functools import wraps
-from typing import Dict, Any, List
+from typing import List, Literal, Dict, Any
 
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.tools import StructuredTool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .schemas.state import AgentState
-from ..services.mcp_tools import get_mcp_manager, AmapTools
-from .tools import web_search as original_web_search
-from ..services.llm_service import get_llm
+from .schemas.state import AgentState, TripIntent
 
 logger = logging.getLogger(__name__)
 
-# ==========================================
-# 全局资源初始化 (代替以前的类的 __init__)
-# ==========================================
-llm = get_llm()
 
-# ==========================================
-# 1. 业务增强工具 & 装饰器保留区
-# ==========================================
+INTENT_PROMPT = """
+你是旅行意图结构化引擎，职责有两个：
+1. 从用户输入中提取结构化意图字段
+2. 为下游 Agent 生成执行指令
 
-_WEB_SEARCH_SUFFIXES = {
-    "attraction": " 真实体验 避坑 拍照点位 游玩时长",
-    "hotel": " 必吃榜 真实评价 排队情况 适合拍照吗",
-}
+━━━━━━━━━━━━━━━━━━━━━━━━
+【全局优先级】自由文本 > 表单选项
+用户在自由文本中的表达是最后意图，永远覆盖表单选项。
+存在矛盾时：has_conflict=True，conflict_note 说明冲突内容和采用决策。
+━━━━━━━━━━━━━━━━━━━━━━━━
 
-def create_enhanced_web_search(agent_type: str) -> StructuredTool:
-    """保留：增强版 web_search 工具，自动补全体感类后缀"""
-    suffix = _WEB_SEARCH_SUFFIXES.get(agent_type, "")
+【规则 R1】hotel_intent 三级判断
 
-    async def enhanced_web_search(query: str) -> str:
+| 值        | 判断条件                                     | 典型触发表达                        |
+|-----------|----------------------------------------------|-------------------------------------|
+| "skip"    | 用户明确不需要订酒店                         | "住哥哥家"、"朋友接待"、"自己解决住宿" |
+| "need"    | 用户明确需要，或表单选了酒店类型且无冲突     | —                                   |
+| "unknown" | 完全未提及住宿（系统默认按 need 处理）       | —                                   |
+
+【规则 R2】given_attractions —— 只提取明确表达的景点
+✅ "想去故宫和颐和园" → ["故宫", "颐和园"]
+❌ "喜欢历史文化" → []（偏好≠具体景点）
+
+【规则 R3】special_requirements —— 语义理解，禁止关键词匹配
+✅ "外婆要来" → ["携带老人"]
+✅ "带着娃" → ["亲子游"]
+✅ "妈妈腿脚不好" → ["携带老人", "无障碍需求"]
+
+【规则 R4】hard_constraints —— 提取排他性、强意志表达
+判断标准：用户是否使用了排他性语气 + 具体对象
+✅ "我要吃老碗会" → 提取（排他性强）
+❌ "想吃点好吃的" → 不提取（泛泛偏好，反映在 travel_style）
+✅ "第一天必须轻松" → 提取
+❌ "偏好休闲" → 不提取
+
+【规则 R5】pre_selected_* —— 排他性语气 + 具体名称时锁定
+
+| 字段                      | 锁定数量 | 触发词示例                                     |
+|---------------------------|----------|------------------------------------------------|
+| pre_selected_hotel        | 唯一     | "就住XX"、"必须住XX"、"已经订了XX"             |
+| pre_selected_attractions  | 多个     | "就去这几个"、"其他不用安排"                   |
+| pre_selected_restaurants  | 多个     | "就去那家XX"、"必须吃XX"                       |
+
+注：填了 pre_selected_attractions → need_attraction_search 设为 False
+
+【规则 R6】agent_instructions —— 将用户限制转化为下游执行指令
+
+| 用户表达类型   | 目标 Agent      | 指令示例                                     |
+|----------------|-----------------|----------------------------------------------|
+| 地理限制       | attraction/hotel | "必须以朝阳区为中心推荐景点"                 |
+| 携带老人       | attraction      | "推荐平缓、无需爬山的休闲景点"               |
+| 亲子游         | attraction      | "优先推荐适合儿童、互动性强的景点"           |
+| 腿脚不便       | attraction      | "选择无需爬坡、设施完善的景点"               |
+| 地道美食偏好   | restaurant      | "搜索当地人常去的老字号餐厅"                 |
+
+指令填写规则：
+- 每条不超过 50 字
+- 无特殊限制时留空字符串 ""
+- 指令会直接注入目标 Agent 的 system prompt
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+【输出要求】严格按 JSON schema 输出，不输出任何额外文字或 markdown 标记。
+━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+
+
+def _resolve_itinerary_style(travel_days: int, hard_constraints: list[str]) -> str:
+    """
+    决定行程节奏。
+    优先尊重用户在 hard_constraints 中的明确节奏要求；
+    否则按天数自动判断：≤2天紧凑，>2天舒缓。
+    """
+    constraints_text = " ".join(hard_constraints or [])
+    if any(kw in constraints_text for kw in ("轻松", "慢", "悠闲", "不赶")):
+        return "relaxed"
+    if any(kw in constraints_text for kw in ("紧凑", "多跑", "塞满", "效率")):
+        return "compact"
+    return "compact" if travel_days <= 2 else "relaxed"
+
+
+class IntentAnalyzer:
+    """
+    意图分析节点 - 系统的入口，运行一次，结果永久存入 state。
+
+    它解决的核心问题：
+    用户说"我住哥哥家，想去几个好玩的地方"，系统不应该再去订酒店。
+    但这句话里没有任何关键词能被规则匹配到，只有 LLM 才能理解。
+
+    这个节点让 LLM 做它最擅长的事——理解自然语言；
+    让规则引擎做它最擅长的事——执行确定性逻辑。
+    """
+
+    def __init__(self, llm):
+        # with_structured_output 强制 LLM 输出符合 TripIntent schema 的 JSON，
+        # 这样我们永远不需要手动解析 LLM 的输出。
+        self.structured_llm = llm.with_structured_output(TripIntent)
+
+    async def analyze(self, state: AgentState) -> Dict[str, Any]:
+        """
+        分析用户意图，将结果写入 state["trip_intent"]。
+
+        这是整个系统唯一一次"理解用户说了什么"的 LLM 调用。
+        之后所有节点都读取 state["trip_intent"]，不再重复推断。
+        """
+        rid = state.get("request_id", "unknown")
+
+        # 如果已经分析过，直接跳过（幂等保护）
+        if state.get("trip_intent"):
+            logger.info(f"[{rid}] 意图已分析，跳过")
+            return {}
+
+        logger.info(f"[{rid}] 开始分析用户意图...")
+
+        # 构建输入消息：同时提供表单数据和自由文本，
+        # 这样 LLM 能检测到两者之间的冲突。
+        user_context = HumanMessage(
+            content=f"""
+请分析以下用户的旅行请求，提取结构化意图。
+
+【表单填写内容】
+目的地：{state.get("city", "未知")}
+旅行天数：{state.get("travel_days", 0)}天
+出行日期：{state.get("start_date", "未知")} 至 {state.get("end_date", "未知")}
+交通方式（表单）：{state.get("transportation", "未选择")}
+住宿偏好（表单）：{state.get("accommodation", "未选择")}
+旅行风格标签（表单）：{state.get("preferences", [])}
+
+【用户自由文本（优先级最高）】
+{state.get("free_text_input", "（用户未填写额外说明）")}
+
+【原始请求消息】
+{state["messages"][0].content if state.get("messages") else "无"}
+"""
+        )
+
         try:
-            enhanced_query = query + suffix
-            logger.info(f"[{agent_type}] web_search 增强: '{query}' -> '{enhanced_query}'")
-            return await original_web_search.ainvoke({"query": enhanced_query})
+            intent: TripIntent = await self.structured_llm.ainvoke(
+                [
+                    SystemMessage(content=INTENT_PROMPT),
+                    user_context,
+                ]
+            )
+
+            # 记录关键决策，方便调试
+            logger.info(
+                f"[{rid}] 意图分析完成 | "
+                f"hotel_intent={intent.hotel_intent} | "
+                f"given_attractions={intent.given_attractions} | "
+                f"special_requirements={intent.special_requirements} | "
+                f"has_conflict={intent.has_conflict}"
+            )
+
+            if intent.has_conflict:
+                logger.warning(f"[{rid}] 检测到冲突: {intent.conflict_note}")
+
+            # 确定性规则：设置行程节奏。
+            # 优先尊重 hard_constraints 中的明确节奏表达，其次按天数兜底。
+            travel_days = state.get("travel_days", 3)
+            intent.itinerary_style = _resolve_itinerary_style(
+                travel_days, intent.hard_constraints
+            )
+            logger.info(
+                f"[{rid}] 行程节奏判定: travel_days={travel_days} "
+                f"hard_constraints={intent.hard_constraints} "
+                f"→ itinerary_style={intent.itinerary_style}"
+            )
+
+            # 构建第一梯队路由（无依赖，可并发）。
+            # hotel / route 是第二梯队，依赖 attractions 数据，由 Supervisor 处理。
+            first_wave = [
+                agent
+                for agent, needed in [
+                    ("attraction_agent", intent.need_attraction_search),
+                    ("weather_agent", intent.need_weather),
+                ]
+                if needed
+            ]
+
+            next_node = "planner_agent" if not first_wave else (
+                first_wave if len(first_wave) > 1 else first_wave[0]
+            )
+
+            return {
+                "trip_intent": intent.model_dump(),
+                "next": next_node,
+            }
+
         except Exception as e:
-            logger.error(f"[web_search] 失败: {e}")
-            return ""
+            logger.error(f"[{rid}] 意图分析失败: {e}，使用保守默认值")
+            # 失败时保守兜底：全部搜索，避免漏掉任何信息
+            travel_days = state.get("travel_days", 3)
+            fallback_intent = TripIntent(
+                hotel_intent="unknown",
+                need_attraction_search=True,
+                need_weather=True,
+                need_route=True,
+                itinerary_style=_resolve_itinerary_style(travel_days, []),
+                reasoning=f"意图分析失败，使用保守默认值。错误: {str(e)}",
+            )
+            return {
+                "trip_intent": fallback_intent.model_dump(),
+                "next": ["attraction_agent", "weather_agent"],
+            }
 
-    enhanced_schema = type(
-        "EnhancedWebSearchInput",
-        (BaseModel,),
-        {"query": (str, ...), "__annotations__": {"query": str}},
-    )
+    def get_node(self):
+        """返回可被 GraphBuilder 使用的节点函数"""
 
-    return StructuredTool(
-        name="web_search",
-        description=original_web_search.description,
-        func=None,
-        coroutine=enhanced_web_search,
-        args_schema=enhanced_schema,
-    )
+        async def intent_node(state: AgentState) -> Dict[str, Any]:
+            return await self.analyze(state)
 
-def with_retry_and_log(func):
-    """保留：统一的异常处理和日志装饰器（去除了 self 依赖）"""
-    @wraps(func)
-    async def wrapper(state: AgentState, *args, **kwargs):
-        agent_name = func.__name__.replace("_node", "")
-        logger.info(f"[{agent_name}] 开始执行...")
-
-        max_retries = 1
-        for attempt in range(1, max_retries + 1):
-            try:
-                result = await func(state, *args, **kwargs)
-                logger.info(f"[{agent_name}] 执行成功")
-                return result
-            except Exception as e:
-                error_str = str(e)
-                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    wait_match = regex_module.search(r"retry in ([\d.]+)s", error_str)
-                    wait_time = float(wait_match.group(1)) + 1 if wait_match else 10.0
-                    logger.warning(f"[{agent_name}] 触发限流，等待 {wait_time:.1f}s (尝试 {attempt}/{max_retries})")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"[{agent_name}] 执行失败: {error_str[:200]}")
-                    break # 非限流错误直接跳出重试
-
-        # 失败兜底返回
-        output_key = "weather_info" if "weather" in agent_name else f"{agent_name}s"
-        return {
-            output_key: [],
-            "agent_call_count": {**state.get("agent_call_count", {}), f"{agent_name}_agent": 1},
-            "errors": [{"agent": f"{agent_name}_agent", "error": f"执行失败: {str(e)}", "fatal": False}]
-        }
-    return wrapper
-
-def build_worker_context(state: AgentState, worker_type: str, include_intent: bool = True) -> str:
-    """保留：提取后的极简上下文构造器"""
-    city = state.get("city", "未知")
-    days = state.get("travel_days", 1)
-    context = f"目的地: {city}，旅行时长: {days}天。\n"
-    
-    if include_intent:
-        intent = state.get("trip_intent", {})
-        context += f"预算级别: {intent.get('budget_level', '未指定')}。\n"
-        if tactical := intent.get("tactical_instructions", {}).get(worker_type):
-            context += f"【🚨 战术约束】: {tactical}\n"
-    return context
-
-def _safe_parse_json(raw_str: str) -> list:
-    """辅助函数：处理大模型偶尔返回的字符串包裹的 JSON"""
-    if isinstance(raw_str, str):
-        try:
-            parsed = json.loads(raw_str)
-            return parsed if isinstance(parsed, list) else [parsed]
-        except:
-            return []
-    return raw_str if isinstance(raw_str, list) else [raw_str]
-
-# ==========================================
-# 2. 纯函数节点区 (核心执行逻辑)
-# ==========================================
-
-@with_retry_and_log
-async def hotel_agent_node(state: AgentState) -> Dict[str, Any]:
-    """酒店智能体"""
-    # 1. 准备工具
-    tools = list(get_mcp_manager().get_tools_by_names([AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL]))
-    tools.append(create_enhanced_web_search("hotel"))
-    llm_with_tools = llm.bind_tools(tools)
-    
-    # 2. 组装请求
-    sys_msg = SystemMessage("你是一个专业的酒店检索助手。请严格根据上下文约束调用工具，获取酒店信息。")
-    human_msg = HumanMessage(build_worker_context(state, "hotel"))
-    
-    # 3. LLM 思考参数 (1次调用)
-    ai_msg = await llm_with_tools.ainvoke([sys_msg, human_msg])
-    
-    # 4. 执行工具
-    results = []
-    if ai_msg.tool_calls:
-        # 直接拿第一个工具调用去执行
-        tool_call = ai_msg.tool_calls[0]
-        tool_func = next((t for t in tools if t.name == tool_call["name"]), tools[0])
-        raw_res = await tool_func.ainvoke(tool_call["args"])
-        results = _safe_parse_json(raw_res)
-
-    return {
-        "hotels": results, 
-        "agent_call_count": {**state.get("agent_call_count", {}), "hotel_agent": 1}
-    }
-
-@with_retry_and_log
-async def attraction_agent_node(state: AgentState) -> Dict[str, Any]:
-    """景点智能体"""
-    tools = list(get_mcp_manager().get_tools_by_names([AmapTools.TEXT_SEARCH, AmapTools.SEARCH_DETAIL]))
-    tools.append(create_enhanced_web_search("attraction"))
-    llm_with_tools = llm.bind_tools(tools)
-    
-    sys_msg = SystemMessage("你是一个专业的景点检索助手。请根据上下文约束调用工具搜索景点。")
-    human_msg = HumanMessage(build_worker_context(state, "attraction"))
-    
-    ai_msg = await llm_with_tools.ainvoke([sys_msg, human_msg])
-    
-    results = []
-    if ai_msg.tool_calls:
-        tool_call = ai_msg.tool_calls[0]
-        tool_func = next((t for t in tools if t.name == tool_call["name"]), tools[0])
-        raw_res = await tool_func.ainvoke(tool_call["args"])
-        results = _safe_parse_json(raw_res)
-
-    return {
-        "attractions": results,
-        "agent_call_count": {**state.get("agent_call_count", {}), "attraction_agent": 1}
-    }
-
-@with_retry_and_log
-async def weather_agent_node(state: AgentState) -> Dict[str, Any]:
-    """天气智能体"""
-    tools = list(get_mcp_manager().get_tools_by_names([AmapTools.WEATHER]))
-    llm_with_tools = llm.bind_tools(tools)
-    
-    sys_msg = SystemMessage("你是一个天气查询助手。请调用工具查询目的地天气。")
-    human_msg = HumanMessage(build_worker_context(state, "weather", include_intent=False))
-    
-    ai_msg = await llm_with_tools.ainvoke([sys_msg, human_msg])
-    
-    results = []
-    if ai_msg.tool_calls:
-        raw_res = await tools[0].ainvoke(ai_msg.tool_calls[0]["args"])
-        results = _safe_parse_json(raw_res)
-
-    return {
-        "weather_info": results,
-        "agent_call_count": {**state.get("agent_call_count", {}), "weather_agent": 1}
-    }
-
-@with_retry_and_log
-async def route_agent_node(state: AgentState) -> Dict[str, Any]:
-    """路线智能体"""
-    attractions = state.get("attractions", [])
-    if not attractions:
-        return {"routes": [], "agent_call_count": {**state.get("agent_call_count", {}), "route_agent": 1}}
-        
-    locations = [f"{a.get('name', '未知')} ({a.get('location', '位置未知')})" for a in attractions[:4]]
-    points_str = " -> ".join(locations)
-    
-    tools = list(get_mcp_manager().get_tools_by_names([AmapTools.DIRECTION_WALKING, AmapTools.DIRECTION_DRIVING]))
-    llm_with_tools = llm.bind_tools(tools)
-    
-    sys_msg = SystemMessage("你是一个交通路线规划助手。请调用工具查询以下途经点序列的路线。")
-    context_str = build_worker_context(state, "route", include_intent=False)
-    human_msg = HumanMessage(f"{context_str}\n【需规划的途经点序列】: {points_str}")
-    
-    ai_msg = await llm_with_tools.ainvoke([sys_msg, human_msg])
-    
-    results = []
-    if ai_msg.tool_calls:
-        tool_call = ai_msg.tool_calls[0]
-        tool_func = next((t for t in tools if t.name == tool_call["name"]), tools[0])
-        raw_res = await tool_func.ainvoke(tool_call["args"])
-        results = _safe_parse_json(raw_res)
-
-    return {
-        "routes": results,
-        "agent_call_count": {**state.get("agent_call_count", {}), "route_agent": 1}
-    }
-
-# ==========================================
-# 3. 统一导出注册表 (给 builder 用)
-# ==========================================
-WORKER_NODES = {
-    "hotel_agent": hotel_agent_node,
-    "attraction_agent": attraction_agent_node,
-    "weather_agent": weather_agent_node,
-    "route_agent": route_agent_node,
-}
-💡 代码亮点解析
-完全解耦：每个 Agent 都是独立函数，想改天气绝不会影响酒店，真正做到“对开发者友好”。
-
-重试机制无缝接入：@with_retry_and_log 完美适配，保留了 429 智能等待。
-
-单步直调，拒绝 ReAct：每个 Worker 中严格遵循 llm.bind_tools -> ainvoke -> tool.ainvoke 的三步走策略，没有任何 while 循环，极度省 Token 且稳定。
-
-你可以直接用这段代码覆盖你的 workers.py。覆盖完成后告诉我，我们立刻开始步骤二（重写 builder.py）！
+        return intent_node

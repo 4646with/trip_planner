@@ -196,7 +196,7 @@ class AgentPrompts:
       "transportation": "地铁/打车",
       "accommodation": "酒店名称",
       "attractions": [{"name": "景点名称", "address": "地址", "location": {"longitude": 116.4, "latitude": 39.9}, "visit_duration": 120, "description": "看点描述", "category": "景点", "ticket_price": 60}],
-      "meals": [{"type": "lunch", "name": "餐厅名", "estimated_cost": 50}]
+      "meals": [{"type": "lunch", "location_hint": "陈家祠周边", "style": "粤式早茶", "price_range": "50-80元/人"}]
     }
   ],
   "weather_info": [{"date": "2025-06-01", "day_weather": "多云", "night_weather": "晴", "day_temp": 28, "night_temp": 24, "wind_direction": "东南风", "wind_power": "3级"}],
@@ -207,9 +207,14 @@ class AgentPrompts:
 【预算计算规则】
 1. total_attractions: 累加所有景点的 ticket_price
 2. total_hotels: 酒店每晚价格 × 住宿天数（如不住宿则填0）
-3. total_meals: 每日餐饮预估（早餐30元、午餐50元、晚餐80元）或按推荐餐厅的 estimated_cost 累加
+3. total_meals: 每日餐饮预估（早餐30元、午餐50元、晚餐80元），按价格区间中位数累加
 4. total_transportation: 公共交通约10元/天、打车约50元/天
 5. total: (景点+酒店+餐饮+交通) × 1.1取整，包含10%备用金
+
+【餐饮安排原则 - 严禁幻觉】
+- 不要推荐具体的餐厅名字（如"老王烧烤"），因为可能不存在
+- 只推荐就餐区域 + 餐饮品类 + 价格区间（如"欢乐海岸周边的椰子鸡，人均100-150元"）
+- 这是安全建议，用户到达后可以按此标准灵活选择
 
 【地理临近性要求 - compact 模式（1-2天行程）】
 - 所有景点必须在步行15分钟或单次地铁可达范围内
