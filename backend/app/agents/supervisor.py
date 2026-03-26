@@ -73,17 +73,3 @@ async def _supervisor_logic(state: AgentState) -> dict:
     return {"next": "planner_agent"}
 
 
-class Supervisor:
-    """保留类封装以兼容 GraphBuilder"""
-
-    def __init__(self, llm=None):
-        pass
-
-    async def decide(self, state: AgentState) -> dict:
-        return await _supervisor_logic(state)
-
-    def get_node(self):
-        async def node(state: AgentState) -> dict:
-            return await self.decide(state)
-
-        return node

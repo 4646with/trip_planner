@@ -9,7 +9,9 @@
 import asyncio
 import os
 import logging
+import time
 from typing import List, Optional, Dict
+from enum import Enum
 
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
@@ -86,6 +88,52 @@ _SCHEMA_MAPPING: Dict[str, type] = {
 _AMAP_SEMAPHORE = asyncio.Semaphore(2)
 
 
+class CircuitState(Enum):
+    CLOSED = "closed"  # 正常
+    OPEN = "open"  # 熔断中，拒绝请求
+    HALF_OPEN = "half_open"  # 试探恢复
+
+
+class CircuitBreaker:
+    def __init__(self, fail_threshold=3, recovery_timeout=30.0):
+        self.fail_threshold = fail_threshold
+        self.recovery_timeout = recovery_timeout
+        self.fail_count = 0
+        self.state = CircuitState.CLOSED
+        self.opened_at: float = 0.0
+
+    def call_succeeded(self):
+        self.fail_count = 0
+        self.state = CircuitState.CLOSED
+
+    def call_failed(self):
+        self.fail_count += 1
+        if self.fail_count >= self.fail_threshold:
+            self.state = CircuitState.OPEN
+            self.opened_at = time.monotonic()
+            logger.warning(f"Circuit breaker OPEN after {self.fail_count} failures")
+
+    def allow_request(self) -> bool:
+        if self.state == CircuitState.CLOSED:
+            return True
+        if self.state == CircuitState.OPEN:
+            if time.monotonic() - self.opened_at >= self.recovery_timeout:
+                self.state = CircuitState.HALF_OPEN
+                logger.info("Circuit breaker HALF_OPEN, probing...")
+                return True
+            return False
+        return True
+
+
+_circuit_breakers: Dict[str, CircuitBreaker] = {}
+
+
+def get_circuit_breaker(tool_name: str) -> CircuitBreaker:
+    if tool_name not in _circuit_breakers:
+        _circuit_breakers[tool_name] = CircuitBreaker()
+    return _circuit_breakers[tool_name]
+
+
 def register_tool_schemas(extra_schemas: Dict[str, type]) -> None:
     """注册额外的工具 schema（由 workers.py 调用）"""
     _SCHEMA_MAPPING.update(extra_schemas)
@@ -107,14 +155,23 @@ def create_tool_wrapper(
     """
 
     async def wrapper(**kwargs) -> str:
+        cb = get_circuit_breaker(tool_name)
+
+        if not cb.allow_request():
+            logger.warning(f"[{tool_name}] Circuit breaker OPEN, fast fail")
+            return ""
+
         async with _AMAP_SEMAPHORE:
             logger.info(f"[{tool_name}] 调用参数: {kwargs}")
             last_error: Optional[Exception] = Exception("未知错误")
             for attempt in range(1, max_retries + 1):
                 try:
-                    return await mcp_tool.ainvoke(kwargs)
+                    result = await mcp_tool.ainvoke(kwargs)
+                    cb.call_succeeded()
+                    return result
                 except Exception as e:
                     last_error = e
+                    cb.call_failed()
                     error_str = str(e)
                     if "CUQPS_HAS_EXCEEDED" in error_str:
                         wait_time = 2.0 * attempt
