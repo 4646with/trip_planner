@@ -3,12 +3,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from ..config import get_settings, validate_config, print_config
+from ..utils.logging import setup_logging
 from .routes import map_agents_router, photo_router
 from ..services.mcp_tools import get_mcp_manager
 from ..agents import initialize_map_agents_system, cleanup_map_agents_system
 
 # 获取配置
 settings = get_settings()
+
+# 初始化日志
+setup_logging()
 
 # 创建FastAPI应用
 app = FastAPI(

@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # 服务器配置
     host: str = "0.0.0.0"
-    port: int = 8001
+    port: int = 8000
 
     # CORS配置 - 使用字符串,在代码中分割
     cors_origins: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000"

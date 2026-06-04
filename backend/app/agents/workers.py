@@ -22,6 +22,7 @@ from .schemas.state import AgentState
 from ..services.mcp_tools import get_mcp_manager, AmapTools
 from .tools import web_search as original_web_search
 from ..services.llm_service import get_llm
+from .schemas.agent_output import AttractionData, WeatherData, HotelData, RouteData
 
 # ==========================================
 # 专业日志配置 (穿透 Uvicorn 屏蔽，带颜色与时间戳)
@@ -41,9 +42,16 @@ if not logger.handlers:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     # 核心：禁止日志冒泡给 Root Logger，防止被 Uvicorn 吃掉
-    logger.propagate = False
+    logger.propagate = True
 
-llm = get_llm()
+_worker_llm = None
+
+
+def get_worker_llm():
+    global _worker_llm
+    if _worker_llm is None:
+        _worker_llm = get_llm()
+    return _worker_llm
 
 # ==========================================
 # 1. 业务增强工具 & 装饰器
@@ -90,16 +98,25 @@ def with_retry_and_log(func):
         agent_name = func.__name__.replace("_node", "")
         logger.info(f"[{agent_name}] 🚀 开始执行...")
 
-        max_retries = 1
+        max_retries = 2  # 限流时多给几次机会
         last_error = None
-
+        is_fatal = False
+ 
         for attempt in range(1, max_retries + 1):
             try:
                 result = await func(state, *args, **kwargs)
                 logger.info(f"[{agent_name}] ✅ 执行成功，拿到数据！")
                 return result
-            except Exception as last_error:
-                error_str = str(last_error)
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
+                
+                # 检测是否是额度不足/余额不足/账户欠费等无法通过重试恢复的致命错误
+                if any(kw in error_str for kw in ["余额不足", "无可用资源包", "充值", "insufficient balance", "Insufficient balance", "1113"]):
+                    logger.error(f"[{agent_name}] ❌ API 额度不足或账户欠费，跳过后续重试！")
+                    is_fatal = True
+                    break
+                
                 if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
                     wait_match = regex_module.search(r"retry in ([\d.]+)s", error_str)
                     wait_time = float(wait_match.group(1)) + 1 if wait_match else 10.0
@@ -110,7 +127,7 @@ def with_retry_and_log(func):
                 else:
                     logger.error(f"[{agent_name}] ❌ 执行失败: {error_str[:200]}")
                     break
-
+ 
         output_key = "weather_info" if "weather" in agent_name else f"{agent_name}s"
         return {
             output_key: [],
@@ -124,7 +141,7 @@ def with_retry_and_log(func):
                     "error": f"执行失败: {str(last_error)}"
                     if last_error
                     else "未知错误",
-                    "fatal": False,
+                    "fatal": is_fatal,
                 }
             ],
         }
@@ -149,14 +166,84 @@ def build_worker_context(
 
 
 def _safe_parse_json(raw_str: str) -> list:
-    """处理大模型返回的 JSON"""
+    """处理并结构化高德地图 MCP 和大模型返回的 JSON"""
+    if not raw_str:
+        return []
+
+    # 如果已经是列表，直接返回
+    if isinstance(raw_str, list):
+        return raw_str
+
+    parsed = None
     if isinstance(raw_str, str):
         try:
             parsed = json.loads(raw_str)
-            return parsed if isinstance(parsed, list) else [parsed]
         except:
-            return []
-    return raw_str if isinstance(raw_str, list) else [raw_str]
+            # 如果不是合法的 JSON 字符串，尝试从中提取包含的 JSON
+            try:
+                start = raw_str.find("[")
+                end = raw_str.rfind("]")
+                if start != -1 and end != -1 and end > start:
+                    parsed = json.loads(raw_str[start : end + 1])
+                else:
+                    start = raw_str.find("{")
+                    end = raw_str.rfind("}")
+                    if start != -1 and end != -1 and end > start:
+                        parsed = json.loads(raw_str[start : end + 1])
+            except:
+                return []
+    else:
+        parsed = raw_str
+
+    if not parsed:
+        return []
+
+    # 结构化解包高德地图 API 的各类响应
+    if isinstance(parsed, dict):
+        # 1. 景点/酒店 POI 搜索结果
+        if "pois" in parsed:
+            return parsed["pois"]
+        
+        # 2. 天气预报实时与预测数据
+        if "lives" in parsed:
+            return parsed["lives"]
+        if "forecasts" in parsed:
+            forecasts = parsed["forecasts"]
+            if forecasts and isinstance(forecasts, list):
+                # 优先提取具体的天气预报 casts 列表
+                casts = forecasts[0].get("casts", [])
+                if casts:
+                    return casts
+            return forecasts
+
+        # 3. 路线规划数据归一化
+        if "route" in parsed:
+            route_data = parsed["route"]
+            paths = route_data.get("paths", [])
+            if paths:
+                first_path = paths[0]
+                steps = first_path.get("steps", [])
+                details = []
+                for s in steps:
+                    if isinstance(s, dict) and "instruction" in s:
+                        details.append(s["instruction"])
+                
+                # 高德返回的 duration 单位是秒，折算为分钟
+                duration_sec = float(first_path.get("duration", 0))
+                duration_min = int(duration_sec // 60)
+                
+                return [{
+                    "origin": route_data.get("origin"),
+                    "destination": route_data.get("destination"),
+                    "duration": duration_min,
+                    "distance": first_path.get("distance"),
+                    "route_detail": "；".join(details)
+                }]
+            return [route_data]
+
+        return [parsed]
+
+    return parsed if isinstance(parsed, list) else [parsed]
 
 
 # ==========================================
@@ -173,7 +260,7 @@ async def hotel_agent_node(state: AgentState) -> Dict[str, Any]:
         )
     )
     tools.append(create_enhanced_web_search("hotel"))
-    llm_with_tools = llm.bind_tools(tools)
+    llm_with_tools = get_worker_llm().bind_tools(tools)
 
     sys_msg = SystemMessage(
         "你是一个专业的酒店检索助手。请严格根据上下文约束调用工具，获取酒店信息。"
@@ -209,7 +296,7 @@ async def attraction_agent_node(state: AgentState) -> Dict[str, Any]:
         )
     )
     tools.append(create_enhanced_web_search("attraction"))
-    llm_with_tools = llm.bind_tools(tools)
+    llm_with_tools = get_worker_llm().bind_tools(tools)
 
     sys_msg = SystemMessage(
         "你是一个专业的景点检索助手。请根据上下文约束调用工具搜索景点。"
@@ -243,7 +330,7 @@ async def attraction_agent_node(state: AgentState) -> Dict[str, Any]:
 async def weather_agent_node(state: AgentState) -> Dict[str, Any]:
     logger.info("⛅ [weather_agent] 正在向大模型请求搜索参数...")
     tools = list(get_mcp_manager().get_tools_by_names([AmapTools.WEATHER]))
-    llm_with_tools = llm.bind_tools(tools)
+    llm_with_tools = get_worker_llm().bind_tools(tools)
 
     sys_msg = SystemMessage("你是一个天气查询助手。请调用工具查询目的地天气。")
     human_msg = HumanMessage(
@@ -289,7 +376,7 @@ async def route_agent_node(state: AgentState) -> Dict[str, Any]:
             [AmapTools.DIRECTION_WALKING, AmapTools.DIRECTION_DRIVING]
         )
     )
-    llm_with_tools = llm.bind_tools(tools)
+    llm_with_tools = get_worker_llm().bind_tools(tools)
 
     sys_msg = SystemMessage(
         "你是一个交通路线规划助手。请调用工具查询以下途经点序列的路线。"
@@ -309,6 +396,17 @@ async def route_agent_node(state: AgentState) -> Dict[str, Any]:
         raw_res = await tool_func.ainvoke(tool_call["args"])
         results = _safe_parse_json(raw_res)
 
+        # 自动注入出行方式（步行/驾车/公交等），以供 Planner 过滤器使用
+        mode = "步行"
+        if "driving" in tool_call["name"]:
+            mode = "驾车"
+        elif "transit" in tool_call["name"]:
+            mode = "公交"
+
+        for r in results:
+            if isinstance(r, dict) and "transportation" not in r:
+                r["transportation"] = mode
+
     return {
         "routes": results,
         "agent_call_count": {**state.get("agent_call_count", {}), "route_agent": 1},
@@ -318,6 +416,66 @@ async def route_agent_node(state: AgentState) -> Dict[str, Any]:
 # ==========================================
 # 3. 统一导出注册表
 # ==========================================
+def _clean_attraction(item: dict) -> dict:
+    if item.get("address") == "暂无":
+        item["address"] = ""
+    return item
+
+
+AGENT_REGISTRY = {
+    "attraction": {
+        "output_key": "attractions",
+        "schema": AttractionData,
+        "data_cleaner": _clean_attraction,
+    },
+    "search": {
+        "output_key": "attractions",
+        "schema": AttractionData,
+        "data_cleaner": _clean_attraction,
+    },
+    "weather": {"output_key": "weather_info", "schema": WeatherData},
+    "hotel": {"output_key": "hotels", "schema": HotelData},
+    "route": {"output_key": "routes", "schema": RouteData},
+}
+
+
+def parse_and_validate(text: str, config: dict) -> list[dict]:
+    """Backward-compatible parser used by existing tests and older callers."""
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return []
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except Exception:
+            return []
+
+    output_key = config.get("output_key")
+    schema = config.get("schema")
+    data_cleaner = config.get("data_cleaner")
+    if not output_key or not schema or not isinstance(parsed, dict):
+        return []
+
+    items = parsed.get(output_key)
+    if not isinstance(items, list):
+        return []
+
+    results = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            if data_cleaner:
+                item = data_cleaner(dict(item))
+            results.append(schema(**item).model_dump())
+        except Exception:
+            continue
+    return results
+
+
 WORKER_NODES = {
     "hotel_agent": hotel_agent_node,
     "attraction_agent": attraction_agent_node,

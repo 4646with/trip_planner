@@ -4,7 +4,6 @@ import logging
 from typing import Union, List
 
 from langgraph.graph import StateGraph, END
-from langgraph.constants import Send
 from langgraph.constants import START
 
 from ..schemas.state import AgentState
@@ -16,7 +15,7 @@ from ..planner import Planner
 logger = logging.getLogger(__name__)
 
 
-def route_from_supervisor(state: AgentState) -> Union[str, List[Send]]:
+def route_from_supervisor(state: AgentState) -> Union[str, List[str]]:
     """
     并发路由函数：将 Supervisor 的指令翻译成 LangGraph 的并发节点
     """
@@ -28,7 +27,7 @@ def route_from_supervisor(state: AgentState) -> Union[str, List[Send]]:
     if isinstance(next_destinations, list):
         if len(next_destinations) == 1:
             return next_destinations[0]
-        return [Send(node_name, state) for node_name in next_destinations]
+        return next_destinations
 
     return "planner_agent"
 

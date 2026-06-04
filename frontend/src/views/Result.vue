@@ -432,7 +432,8 @@ const loadAttractionPhotos = async () => {
 
   tripPlan.value.days.forEach(day => {
     day.attractions.forEach(attraction => {
-      const promise = fetch(`http://localhost:8000/api/poi/photo?name=${encodeURIComponent(attraction.name)}`)
+      const apiBaseUrl = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8000'
+      const promise = fetch(`${apiBaseUrl}/api/poi/photo?name=${encodeURIComponent(attraction.name)}`)
         .then(res => res.json())
         .then(data => {
           if (data.success && data.data.photo_url) {
@@ -727,6 +728,9 @@ const restoreMap = () => {
   }
 }
 
+void captureMapImage
+void restoreMap
+
 // 初始化地图
     const initMap = async () => {
       try {
@@ -737,7 +741,7 @@ const restoreMap = () => {
             securityJsCode: import.meta.env.VITE_AMAP_SECURITY_JS_CODE  // 高德JS API安全密钥
           },
           plugins: ['AMap.Marker', 'AMap.Polyline', 'AMap.InfoWindow']
-        })
+        } as any)
 
         // 收集所有有效坐标
         const validLocations = [] as { longitude: number; latitude: number }[];

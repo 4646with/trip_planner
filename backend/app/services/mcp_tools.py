@@ -116,12 +116,17 @@ class CircuitBreaker:
     def allow_request(self) -> bool:
         if self.state == CircuitState.CLOSED:
             return True
+
         if self.state == CircuitState.OPEN:
             if time.monotonic() - self.opened_at >= self.recovery_timeout:
                 self.state = CircuitState.HALF_OPEN
-                logger.info("Circuit breaker HALF_OPEN, probing...")
+                logger.info("Circuit breaker HALF_OPEN, sending probe request...")
                 return True
             return False
+
+        if self.state == CircuitState.HALF_OPEN:
+            return False
+
         return True
 
 
@@ -158,7 +163,9 @@ def create_tool_wrapper(
         cb = get_circuit_breaker(tool_name)
 
         if not cb.allow_request():
-            logger.warning(f"[{tool_name}] Circuit breaker OPEN, fast fail")
+            logger.warning(
+                f"[{tool_name}] Circuit breaker intercept (State: {cb.state.name}), fast fail"
+            )
             return ""
 
         async with _AMAP_SEMAPHORE:

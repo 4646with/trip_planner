@@ -27,7 +27,7 @@ from .prompts.agents import AgentPrompts
 # 工具（如需扩展）
 from .workers import WORKER_NODES
 from .planner import Planner
-from .supervisor import Supervisor
+from .supervisor import _supervisor_logic as Supervisor
 
 __all__ = [
     # 主接口
